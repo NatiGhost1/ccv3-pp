@@ -27,12 +27,16 @@ use self::skills::OsuSkills;
 
 use super::attributes::OsuDifficultyAttributes;
 
-mod evaluators;
+pub mod evaluators;
 pub mod gradual;
 mod object;
 pub mod rating;
 pub mod scaling_factor;
 pub mod skills;
+
+// CC V3 modules
+pub mod tap_bpm;
+pub mod speed_precal;
 
 const STAR_RATING_MULTIPLIER: f64 = 0.0265;
 
@@ -88,6 +92,10 @@ fn calculate_difficulty(difficulty: &Difficulty, map: &Beatmap) -> OsuDifficulty
     let slider_nested_score_per_object =
         NestedScorePerObject::calculate(&osu_objects, passed_objects);
     attrs.nested_score_per_object = slider_nested_score_per_object;
+
+    // ═══ CC V3 post-processing ══════════════════════════════════════
+    // Store CS for the performance pass nerfs.
+    attrs.cs = f64::from(map_attrs.cs());
 
     attrs
 }
@@ -168,6 +176,106 @@ impl DifficultyValues {
         for hit_object in diff_objects.iter().take(take_diff_objects) {
             skills.process(hit_object, &diff_objects);
         }
+
+        // ═══ CC V3: extract data from diff_objects before they drop ═
+        // Build SpeedObjectData for tap_bpm and speed_precal.
+        // Also extract per-object speed strains from the speed skill.
+        let clock_rate = difficulty.get_clock_rate();
+
+        let speed_object_data: Vec<tap_bpm::SpeedObjectData> = diff_objects
+            .iter()
+            .map(|obj| tap_bpm::SpeedObjectData {
+                delta_time: obj.delta_time,
+                pos_x: obj.base.stacked_pos().x,
+                pos_y: obj.base.stacked_pos().y,
+            })
+            .collect();
+
+        // Object strains from the speed skill (for tap_bpm top-10% filtering)
+        let object_strains: Vec<f64> = skills.speed.get_object_strains();
+
+        // Strain peaks for local_sr_per_minute (marathon decay)
+        let aim_peaks: Vec<f64> = skills.aim.cloned_strain_peaks();
+        let speed_peaks: Vec<f64> = skills.speed.cloned_strain_peaks();
+
+        // Compute dominant_tap_bpm
+        if !object_strains.is_empty() && !speed_object_data.is_empty() {
+            attrs.dominant_tap_bpm =
+                tap_bpm::dominant_tap_bpm(&object_strains, &speed_object_data, 0.10);
+        }
+
+        // Compute speed rework multipliers
+        let sr_params = speed_precal::SpeedReworkParams::default();
+        attrs.speed_rework_mult_vanilla =
+            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, false);
+        attrs.speed_rework_mult_autopilot =
+            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, true);
+
+        // Compute local_sr_per_minute for marathon decay
+        attrs.local_sr_per_minute = crate::osu::performance::relax_marathon::local_sr_per_minute(
+            &aim_peaks,
+            &speed_peaks,
+        );
+
+        // Compute avg_jump_dist and median_delta_time
+        let mut dist_sum = 0.0;
+        let mut dist_count = 0u32;
+        for obj in &diff_objects {
+            if obj.lazy_jump_dist > 0.0 {
+                dist_sum += obj.lazy_jump_dist;
+                dist_count += 1;
+            }
+        }
+        attrs.avg_jump_dist = if dist_count > 0 {
+            dist_sum / f64::from(dist_count)
+        } else {
+            0.0
+        };
+
+        // Median delta_time
+        let mut deltas: Vec<f64> = speed_object_data
+            .iter()
+            .map(|o| o.delta_time)
+            .filter(|d| *d > 0.0)
+            .collect();
+        if !deltas.is_empty() {
+            deltas.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let m = deltas.len() / 2;
+            attrs.median_delta_time = if deltas.len() % 2 == 1 {
+                deltas[m]
+            } else {
+                (deltas[m - 1] + deltas[m]) / 2.0
+            };
+        }
+
+        // Compute rx_chunk_hardness and rx_chunk_avg_delta
+        let mut hardness_chunks: Vec<f64> = Vec::new();
+        let mut avg_delta_chunks: Vec<f64> = Vec::new();
+        let mut chunk_hardness = 0.0;
+        let mut chunk_delta_sum = 0.0;
+        let mut chunk_count: u32 = 0;
+        for obj in &speed_object_data {
+            if obj.delta_time > 0.0 {
+                chunk_hardness += 1.0 / obj.delta_time;
+                chunk_delta_sum += obj.delta_time;
+                chunk_count += 1;
+                if chunk_count == 4 {
+                    hardness_chunks.push(chunk_hardness);
+                    avg_delta_chunks.push(chunk_delta_sum / 4.0);
+                    chunk_hardness = 0.0;
+                    chunk_delta_sum = 0.0;
+                    chunk_count = 0;
+                }
+            }
+        }
+        if chunk_count > 0 {
+            hardness_chunks.push(chunk_hardness);
+            avg_delta_chunks.push(chunk_delta_sum / chunk_count as f64);
+        }
+        attrs.rx_chunk_hardness = hardness_chunks;
+        attrs.rx_chunk_avg_delta = avg_delta_chunks;
+
+        // ═══ End CC V3 post-processing ══════════════════════════════
 
         Self {
             osu_objects,

@@ -27,6 +27,10 @@ use super::{
 };
 
 mod calculator;
+pub mod rx_miss;
+pub mod ap_miss;
+pub mod relax_marathon;
+pub mod speed_rework;
 pub mod gradual;
 mod hitresult_generator;
 mod inspect;

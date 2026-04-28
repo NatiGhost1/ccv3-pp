@@ -3,7 +3,10 @@ use crate::{
         object::{HasStartTime, IDifficultyObject},
         skills::{StrainSkill, strain_decay},
     },
-    osu::difficulty::{evaluators::AimEvaluator, object::OsuDifficultyObject},
+    osu::difficulty::{
+        evaluators::{AimEvaluator, AimRxEvaluator},
+        object::OsuDifficultyObject,
+    },
     util::float_ext::FloatExt,
 };
 
@@ -13,6 +16,9 @@ define_skill! {
     #[derive(Clone)]
     pub struct Aim: StrainSkill => [OsuDifficultyObject<'a>][OsuDifficultyObject<'a>] {
         include_sliders: bool,
+        /// CC V3: when true, dispatches to AimRxEvaluator instead of
+        /// AimEvaluator for Relax-specific aim strain.
+        has_relax: bool,
         current_strain: f64 = 0.0,
         slider_strains: Vec<f64> = Vec::with_capacity(64),
     }
@@ -41,8 +47,15 @@ impl Aim {
         objects: &[OsuDifficultyObject<'_>],
     ) -> f64 {
         self.current_strain *= strain_decay(curr.delta_time, Self::STRAIN_DECAY_BASE);
-        self.current_strain += AimEvaluator::evaluate_diff_of(curr, objects, self.include_sliders)
-            * Self::SKILL_MULTIPLIER;
+
+        // CC V3: dispatch to RX evaluator when Relax flag is set
+        let eval_result = if self.has_relax {
+            AimRxEvaluator::evaluate_diff_of(curr, objects, self.include_sliders)
+        } else {
+            AimEvaluator::evaluate_diff_of(curr, objects, self.include_sliders)
+        };
+
+        self.current_strain += eval_result * Self::SKILL_MULTIPLIER;
 
         if curr.base.is_slider() {
             self.slider_strains.push(self.current_strain);

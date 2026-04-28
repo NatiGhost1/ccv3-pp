@@ -129,7 +129,134 @@ impl OsuPerformanceCalculator<'_> {
         let acc_value = self.compute_accuracy_value();
         let flashlight_value = self.compute_flashlight_value(effective_miss_count);
 
-        let pp = (aim_value.powf(1.1)
+        let mut pp = (aim_value.powf(1.1)
+            + speed_value.powf(1.1)
+            + acc_value.powf(1.1)
+            + flashlight_value.powf(1.1))
+        .powf(1.0 / 1.1)
+            * multiplier;
+
+        // ═════════════════════════════════════════════════════════════
+        // CC V3 additions to the performance pass
+        // ═════════════════════════════════════════════════════════════
+
+        // ── Speed rework multiplier ─────────────────────────────────
+        let speed_mult = if self.mods.ap() {
+            if self.attrs.speed_rework_mult_autopilot > 0.0 {
+                self.attrs.speed_rework_mult_autopilot
+            } else {
+                1.0
+            }
+        } else if self.attrs.speed_rework_mult_vanilla > 0.0 {
+            self.attrs.speed_rework_mult_vanilla
+        } else {
+            1.0
+        };
+        speed_value *= speed_mult;
+
+        // Recompute pp with the speed rework applied
+        pp = (aim_value.powf(1.1)
+            + speed_value.powf(1.1)
+            + acc_value.powf(1.1)
+            + flashlight_value.powf(1.1))
+        .powf(1.0 / 1.1)
+            * multiplier;
+
+        // ── Relax marathon decay ────────────────────────────────────
+        if self.mods.rx() {
+            let params = super::relax_marathon::MarathonDecayParams::default();
+            let mult = super::relax_marathon::relax_marathon_multiplier(
+                &self.attrs.local_sr_per_minute,
+                &params,
+            );
+            aim_value *= mult;
+            flashlight_value *= mult;
+        }
+
+        // ── CC V3 consistency multiplier (non-RX, non-AP) ───────────
+        let ccv3_mult = self.apply_cc_v3_multiplier(effective_miss_count);
+        let combo_tax = self.combo_ratio_tax();
+        let ccv3_scale = ccv3_mult * combo_tax;
+
+        pp *= ccv3_scale;
+        aim_value *= ccv3_scale;
+        speed_value *= ccv3_scale;
+        acc_value *= ccv3_scale;
+        flashlight_value *= ccv3_scale;
+
+        // ── AP standalone miss system ───────────────────────────────
+        if self.mods.ap() {
+            let ap_mult = super::ap_miss::ap_miss_multiplier(
+                self.attrs.od(),
+                self.attrs.dominant_tap_bpm,
+                &self.attrs.rx_chunk_hardness,
+                &self.attrs.rx_chunk_avg_delta,
+                self.state.hitresults.n300,
+                self.state.hitresults.n100,
+                self.state.hitresults.n50,
+                self.state.hitresults.misses,
+                self.state.max_combo,
+                self.attrs.max_combo,
+            );
+            pp *= ap_mult;
+            aim_value *= ap_mult;
+            speed_value *= ap_mult;
+            acc_value *= ap_mult;
+            flashlight_value *= ap_mult;
+        }
+
+        // ── RX standalone miss system ───────────────────────────────
+        if self.mods.rx() && self.state.hitresults.misses > 0 {
+            let rx_mult = super::rx_miss::rx_miss_multiplier(
+                &self.attrs.rx_chunk_hardness,
+                &self.attrs.rx_chunk_avg_delta,
+                self.attrs.median_delta_time,
+                self.state.hitresults.n300,
+                self.state.hitresults.n100,
+                self.state.hitresults.n50,
+                self.state.hitresults.misses,
+                self.state.max_combo,
+                self.attrs.max_combo,
+            );
+            pp *= rx_mult;
+            aim_value *= rx_mult;
+            speed_value *= rx_mult;
+            acc_value *= rx_mult;
+            flashlight_value *= rx_mult;
+        }
+
+        // ── Targeted PP-layer nerfs ─────────────────────────────────
+
+        // OD < 9 accuracy nerf
+        if self.attrs.od() < 9.0 && !self.mods.rx() {
+            let below = (9.0 - self.attrs.od()).min(3.0);
+            let od_nerf = 1.0 - 0.073 * below;
+            acc_value *= od_nerf;
+        }
+
+        // AR 10.1-10.5 band nerf
+        if self.attrs.ar > 10.1 && self.attrs.ar <= 10.5 && !self.mods.rx() {
+            let mid = 10.3;
+            let half = 0.2;
+            let t = 1.0 - ((self.attrs.ar - mid).abs() / half).min(1.0);
+            aim_value *= 1.0 - 0.06 * t;
+        }
+
+        // CS + mid-BPM 1/2 nerf
+        if self.attrs.median_delta_time > 0.0 {
+            let md = self.attrs.median_delta_time;
+            let in_band = md >= 176.0 && md <= 250.0;
+            let cs = self.attrs.cs;
+            if in_band && cs >= 4.6 && cs <= 6.4 {
+                let cs_t = 1.0 - ((cs - 5.5).abs() / 0.9).min(1.0);
+                let bpm_1_2 = 30_000.0 / md;
+                let bpm_t = 1.0 - ((bpm_1_2 - 145.0).abs() / 25.0).min(1.0);
+                aim_value *= 1.0 - 0.10 * cs_t * bpm_t;
+            }
+        }
+
+        // Recompute final pp with all nerfs
+        pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
             + acc_value.powf(1.1)
             + flashlight_value.powf(1.1))
@@ -650,15 +777,64 @@ impl OsuPerformanceCalculator<'_> {
     }
 
     const fn n_large_tick_miss(&self) -> u32 {
-        // Lazer unconditionally uses the "large tick miss" hitresult and
-        // relies on this value being correctly provided by the caller / user.
-        // On stable, this value should always be 0.
-        //
-        // This is a best-effort workaround to achieve the same behavior.
         if self.using_classic_slider_acc {
             0
         } else {
             self.attrs.n_large_ticks - self.state.hitresults.large_tick_hits
         }
+    }
+
+    // ── CC V3 helper methods ────────────────────────────────────────
+
+    /// CC V3 combo-ratio tax. Light tax based on achieved combo ratio.
+    /// FC passes through untouched.
+    fn combo_ratio_tax(&self) -> f64 {
+        if self.attrs.max_combo == 0 {
+            return 1.0;
+        }
+        let ratio = (f64::from(self.state.max_combo) / f64::from(self.attrs.max_combo))
+            .clamp(0.0, 1.0);
+        (0.85 + 0.15 * ratio.powf(0.35)).min(1.0)
+    }
+
+    /// CC V3 exponential consistency multiplier (non-RX, non-AP).
+    /// RX and AP use their own standalone miss systems and bypass this.
+    fn apply_cc_v3_multiplier(&self, effective_miss_count: f64) -> f64 {
+        if effective_miss_count <= 0.0 {
+            return 1.0;
+        }
+
+        // RX and AP use standalone systems
+        if self.mods.rx() || self.mods.ap() {
+            return 1.0;
+        }
+
+        let map_max_combo = self.attrs.max_combo;
+        let misses = effective_miss_count;
+        let mut p: f64 = 0.998;
+
+        if self.mods.dt() && self.mods.hr() { p += 0.0025; }
+        if self.mods.dt() && self.mods.ez() { p += 0.0028; }
+        if map_max_combo <= 500 && self.mods.dt() { p -= 0.02; }
+        if map_max_combo <= 500 && self.mods.dt() && self.mods.hr() { p -= 0.01; }
+
+        let miss_exp = if misses >= 14.0 { 2.4 }
+            else if misses >= 6.0 { 2.3 }
+            else if misses >= 4.0 { 2.1 }
+            else if misses >= 2.0 { 1.7 }
+            else { 1.5 };
+
+        let mara_miss_exp = if misses >= 16.0 { 2.3 }
+            else if misses >= 6.0 { 2.1 }
+            else if misses >= 4.0 { 1.9 }
+            else { 1.5 };
+
+        let miss_weight = if map_max_combo >= 2000 {
+            misses.powf(mara_miss_exp)
+        } else {
+            misses.powf(miss_exp)
+        };
+
+        p.powf(miss_weight)
     }
 }

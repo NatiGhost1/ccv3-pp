@@ -58,6 +58,27 @@ pub struct OsuDifficultyAttributes {
     pub stars: f64,
     /// The maximum combo.
     pub max_combo: u32,
+
+    // ── CC V3 fields ────────────────────────────────────────────────
+    /// CC V3: 1/4 BPM of the median delta in the top 10% hardest speed
+    /// sections. Used by the speed rework.
+    pub dominant_tap_bpm: f64,
+    /// CC V3: precomputed speed multiplier for non-AP plays.
+    pub speed_rework_mult_vanilla: f64,
+    /// CC V3: precomputed speed multiplier for AP plays.
+    pub speed_rework_mult_autopilot: f64,
+    /// CC V3: per-minute local SR for Relax marathon decay.
+    pub local_sr_per_minute: Vec<f64>,
+    /// CC V3: mean pairwise object spacing (osu!px).
+    pub avg_jump_dist: f64,
+    /// CC V3: median delta across all objects (rate-adjusted ms).
+    pub median_delta_time: f64,
+    /// CC V3: circle size after mod adjustment.
+    pub cs: f64,
+    /// CC V3 (RX/AP): hardness proxy per 4-note chunk.
+    pub rx_chunk_hardness: Vec<f64>,
+    /// CC V3 (RX/AP): average delta_time per 4-note chunk.
+    pub rx_chunk_avg_delta: Vec<f64>,
 }
 
 impl OsuDifficultyAttributes {
