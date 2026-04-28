@@ -123,6 +123,31 @@ impl AimEvaluator {
             wide_angle_bonus *=
                 angle_bonus * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER));
 
+            // ── CC V3: BPM-aware repetition handling ─────────────────
+            // Below 410 BPM effective: full repetition penalty (anti-farm).
+            // 410–500 BPM: penalty fades out, replaced by a buff.
+            // Above 500 BPM: no penalty, full repetition buff.
+            let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
+            let high_bpm_t = ((eff_bpm - 410.0) / 90.0).clamp(0.0, 1.0);
+
+            // * Wide angles: penalize if repeated at low BPM, buff if repeated at high BPM.
+            let wide_rep_raw = wide_angle_bonus
+                .min(Self::calc_wide_angle_bonus(last_angle).powf(3.0));
+            let wide_penalty = wide_rep_raw * (1.0 - high_bpm_t);
+            let wide_rep_buff = high_bpm_t * 0.15;
+            wide_angle_bonus *= angle_bonus
+                * ((1.0 - wide_penalty + wide_rep_buff).max(0.0));
+
+            // * Acute angles: same treatment.
+            let acute_rep_raw = acute_angle_bonus
+                .min(Self::calc_acute_angle_bonus(last_angle).powf(3.0)); // note: uses last_angle here in akat-based, kept consistent
+            let acute_penalty = acute_rep_raw * (1.0 - high_bpm_t);
+            let acute_rep_buff = high_bpm_t * 0.10;
+            acute_angle_bonus *= (0.5
+                + 0.5 * (1.0 - acute_penalty)
+                + acute_rep_buff)
+                .max(0.0);
+
             // * Apply wiggle bonus for jumps that are [radius, 3*diameter] in distance, with < 110 angle
             // * https://www.desmos.com/calculator/dp0v0nvowc
             wiggle_bonus = angle_bonus
