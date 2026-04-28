@@ -49,7 +49,7 @@ impl OsuRatingCalculator<'_> {
         }
 
         if self.mods.rx() {
-            aim_rating *= 0.9;
+            aim_rating = 1.0; // aim_rx.rs handles aim for relax specifically no aim rating nerf
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {
@@ -105,7 +105,7 @@ impl OsuRatingCalculator<'_> {
         let mut speed_rating = Self::calculate_difficulty_rating(speed_difficulty_value);
 
         if self.mods.ap() {
-            speed_rating *= 0.5;
+            speed_rating *= 0.87; // 0.5 speed rating is way too fucking harsh (pp devs were on crack)
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {
@@ -122,11 +122,15 @@ impl OsuRatingCalculator<'_> {
                 * 0.5;
 
         let ar_factor = if self.mods.ap() {
-            0.0
-        } else if self.approach_rate > 10.33 {
-            0.3 * (self.approach_rate - 10.33)
+        if self.approach_rate > 10.33 {
+            0.3 * (self.approach_rate - 10.33) * 0.2 // 20% of normal bonus
         } else {
-            0.0
+            0.0 // Returns 0.0 if AR is 10.33 or lower
+        }
+        } else if self.approach_rate > 10.33 {
+        0.3 * (self.approach_rate - 10.33)
+        } else {
+        0.0
         };
 
         // * Buff for longer maps with high AR.
@@ -163,9 +167,9 @@ impl OsuRatingCalculator<'_> {
         }
 
         if self.mods.rx() {
-            flashlight_rating *= 0.7;
+            flashlight_rating *= 0.72; // fl on relax is easier than vn (less reading don't need to tap) but still hard unlike ap
         } else if self.mods.ap() {
-            flashlight_rating *= 0.4;
+            flashlight_rating *= 0.28; // autopilot players just need to follow a rhythm this makes fl trivial
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {
