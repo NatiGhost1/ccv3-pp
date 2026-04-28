@@ -32,6 +32,7 @@ pub mod ap_miss;
 pub mod relax_marathon;
 pub mod speed_rework;
 pub mod gradual;
+pub mod auto_marathon;
 mod hitresult_generator;
 mod inspect;
 

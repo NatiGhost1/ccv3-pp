@@ -173,6 +173,17 @@ impl OsuPerformanceCalculator<'_> {
             flashlight_value *= mult;
         }
 
+        // ── Autopilot marathon decay ────────────────────────────────────
+        if self.mods.ap() {
+            let params = super::auto_marathon::AutopilotDecayParams::default();
+            let mult = super::auto_marathon::autopilot_marathon_multiplier(
+                &self.attrs.local_sr_per_minute,
+                &params,
+            );
+            speed_value *= mult;
+            flashlight_value *= mult;
+        }
+
         // ── CC V3 consistency multiplier (non-RX, non-AP) ───────────
         let ccv3_mult = self.apply_cc_v3_multiplier(effective_miss_count);
         let combo_tax = self.combo_ratio_tax();

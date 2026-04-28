@@ -2,29 +2,29 @@ use crate::osu::difficulty::skills::strain;
 use crate::osu::performance::PERFORMANCE_BASE_MULTIPLIER;
 
 #[derive(Clone, Copy)]
-pub struct MarathonDecayParams {
+pub struct AutopilotDecayParams {
     pub tau: f64, // tolerance in stars, e.g. 0.50
     pub b: f64,   // e.g. 0.02
     pub q: f64,   // e.g. 1.35
     pub double_at: u32, // minutes, e.g. 5
 }
 
-impl Default for MarathonDecayParams {
+impl Default for AutopilotDecayParams {
     fn default() -> Self {
         Self {
-            tau: 0.50,
-            b: 0.02,
-            q: 1.35,
-            double_at: 5,
+            tau: 1.0,
+            b: 0.05,
+            q: 1.40,
+            double_at: 3,
         }
     }
 }
 
-pub fn decay_divisor(r: u32, p: MarathonDecayParams) -> f64 {
+pub fn decay_divisor(r: u32, p: AutopilotDecayParams) -> f64 {
     let rf = r as f64;
     let base = 1.0 + p.b * rf.powf(p.q);
     if r >= p.double_at {
-        1.3 * base
+        1.15 * base
     } else {
         base
     } 
@@ -117,7 +117,7 @@ pub fn local_sr_per_minute(strains_aim: &[f64], strains_speed: &[f64]) -> Vec<f6
     out
 }
 
-pub fn relax_marathon_multiplier(local_sr: &[f64], params: MarathonDecayParams) -> f64 {
+pub fn autopilot_marathon_multiplier(local_sr: &[f64], params: AutopilotDecayParams) -> f64 {
     if local_sr.len() < 2 {
         return 1.0;
     }
