@@ -4,7 +4,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## Development Roadmap
 
-### (NF) Deterministic Fail Detection
+### Deterministic Fail Detection
 - Implement a 100% accurate, high-fidelity fail detection system.
 - Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
 
