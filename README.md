@@ -11,7 +11,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 - [ ] **Judgment & Miss Rebalancing**
     - Increase the performance penalty for misses to heighten difficulty scaling.
     - **N50 Refactor:**
-        - Assign the first N50/miss a weight of 1 `effective_miss`.
+        - Assign the first N50 a weight of 1 `effective_miss`.
         - Implement AR-dependent scaling where the first 2–3 N50s are counted as full `effective_misses`.
         - Revert to standard N50 scaling formulas once this initial threshold is exceeded.
 
