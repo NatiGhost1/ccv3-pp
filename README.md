@@ -4,35 +4,37 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## Development Roadmap
 
-- [ ] **(NF) Deterministic Fail Detection**
-    - Implement a 100% accurate, high-fidelity fail detection system.
-    - Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
+### (NF) Deterministic Fail Detection
+- Implement a 100% accurate, high-fidelity fail detection system.
+- Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
 
-- [ ] **Judgment & Miss Rebalancing**
-    - Increase the performance penalty for misses to heighten difficulty scaling.
-    - **N50 Refactor:**
-        - Assign the first N50 a weight of 1 `effective_miss`.
-        - Implement AR-dependent scaling where the first 2–3 N50s are counted as full `effective_misses`.
-        - Revert to standard N50 scaling formulas once this initial threshold is exceeded.
+### Judgment & Miss Rebalancing
+- Harshen the performance penalty for misses to heighten difficulty scaling.
+- **N50 Refactor:**
+    - Assign the first N50 a weight of 1 `effective_miss`.
+    - **AR-Dependent Thresholding:** On specific AR values, the first 2–3 N50s are processed as 1 `effective_miss` each.
+    - Revert to standard N50 scaling formulas immediately once this specific 2–3 count threshold is exceeded.
+    - **NOTE** it is not only AR dependent OD plays a huge factor in the amount of n50's processed as 1 `effective_miss`.
 
-- [ ] **Combo Weighting Overhaul**
-    - Apply more aggressive scaling to the combo ratio factor.
-    - Significantly increase the penalty for broken combos to ensure the final PP output better reflects play consistency.
+### Combo Weighting Overhaul
+- Apply more aggressive scaling to the combo ratio factor.
+- Significantly increase the penalty for broken combos to ensure the final PP output better reflects play consistency.
 
-- [ ] **System Integration & Porting**
-    - Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
+### System Integration & Porting
+- Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
 
-- [ ] **[TODO] Aim Scaling & Consistency Calibration**
-    - Recalibrate aim PP scaling to align more closely with the original CCV3 values.
-    - **Context:** This adjustment is critical as `rosu-pp` applies a more aggressive baseline nerf to "slop" or "farm" patterns compared to `akatsuki-pp`. Without this recalibration, the cumulative nerfs inherited from the original Akatsuki-based system may result in excessive performance penalties.
+### Aim Scaling & Consistency Calibration
+- Recalibrate aim PP scaling to align more closely with original CCV3 values.
+- **Context:** The original CCV3 system was built on `akatsuki-pp`, where aim values are significantly more overweight compared to modern `rosu` calculations. Because `rosu` applies a much harsher baseline nerf to "slop" and "farm" patterns, failing to recalibrate would result in an unintentional "double-nerf" when combined with CCV3's consistency logic.
+- **Methodology:** Surgically rework the base aim evaluator to mirror the output characteristics of Akatsuki’s sine-styled evaluation. 
+- **Preservation of Architecture:** Retain the modern `rosu` framework rather than reverting to legacy code. Apply iterative modifications to the evaluator until the resulting PP values are roughly equivalent to the original Akatsuki-based benchmarks.
 
-- [ ] **[ALTERNATIVE] Adjust Aim Constants Like WIDE_ANGLE_MULTIPLIER to Calibrate Aim PP**
-    - Less accurate & `WIGGLE_MULTIPLIER` isnt in the akatsuki aim evaluator increasing the chances of inaccuracy.
-     
-- [ ] **[POTENTIAL/LIKELY] Reworked Exponential Miss Decay (STD Only)**
-    - **Proposed Logic:** Replace the current static, tiered exponent system (e.g., 1.5–2.4 based on miss count) with a curve that scales **exponentially based on existing misses and `map_max_combo`**.
-    - **Dynamic Weighting:** The miss decay curve will utilize a base weight derived from mod/combo-based $p$ values, with the exponent increasing dynamically for every additional miss. This ensures fairer weighting by accounting for map length rather than using rigid thresholds.
-    - **Final Performance Calibration:** Upon completion, apply a final multiplier based on accuracy and miss count (with a length-dependent buffer for long maps).
-    - **Implementation:** This will either be calculated server-side post-process or scaled in real-time by tracking the maximum possible accuracy and current miss count throughout the play.
-    - **Note** This keeps the original point of the pp system intact while adding better logic for misses.
+### [ALTERNATIVE] Parameter Tuning (e.g., WIDE_ANGLE_MULTIPLIER)
+- Adjust aim constants directly to calibrate output. 
+- *Note:* This is less accurate, as key parameters like `WIGGLE_MULTIPLIER` are absent from the Akatsuki aim evaluator, increasing the risk of calculation drift.
 
+### [POTENTIAL] Reworked Exponential Miss Decay (STD Only)
+- **Algorithmic Refinement:** Replace the current static, tiered exponent system (where `miss_exp` jumps between 1.5 and 2.4 at fixed thresholds) with a continuous, dynamic curve.
+- **Dynamic Scaling Logic:** Instead of arbitrary "steps" at 2, 4, or 14 misses, the new system calculates a fluid exponent that scales based on `misses` and `map_max_combo`. This ensures the penalty is mathematically proportional to map length and total play impact.
+- **Continuous Evolution:** The miss decay curve will utilize a base weight derived from mod/combo-based $p$ values, with the exponent increasing dynamically for every additional miss. This preserves the core philosophy of the system while providing a more granular and fair consistency evaluation.
+- **Final Calibration:** Apply a final multiplier based on accuracy and miss count (with a length-dependent buffer for long maps) either server-side post-process or via real-time scaling of maximum possible accuracy.
