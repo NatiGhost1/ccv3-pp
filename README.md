@@ -4,7 +4,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## Development Roadmap
 
-- [ ] **Deterministic Fail Detection**
+- [ ] **(NF) Deterministic Fail Detection**
     - Implement a 100% accurate, high-fidelity fail detection system.
     - Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
 
@@ -22,7 +22,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 - [ ] **System Integration & Porting**
     - Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
 
-- [ ] **Aim Scaling & Consistency Calibration**
+- [ ] **[TODO] Aim Scaling & Consistency Calibration**
     - Recalibrate aim PP scaling to align more closely with the original CCV3 values.
     - **Context:** This adjustment is critical as `rosu-pp` applies a more aggressive baseline nerf to "slop" or "farm" patterns compared to `akatsuki-pp`. Without this recalibration, the cumulative nerfs inherited from the original Akatsuki-based system may result in excessive performance penalties.
 
