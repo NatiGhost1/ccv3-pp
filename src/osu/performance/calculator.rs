@@ -84,7 +84,10 @@ impl OsuPerformanceCalculator<'_> {
         let mut multiplier = PERFORMANCE_BASE_MULTIPLIER;
 
         if self.mods.nf() {
-            multiplier *= (1.0 - 0.02 * effective_miss_count).max(0.9);
+            // CC V3: NoFail has its own standalone system (see nofail.rs).
+            // The old per-miss multiplier is removed — the NF module handles
+            // everything including short-map tax, symmetric scaling, and
+            // per-miss decay. This line is kept as a no-op placeholder.
         }
 
         if self.mods.so() && total_hits > 0.0 {
@@ -234,6 +237,32 @@ impl OsuPerformanceCalculator<'_> {
             speed_value *= rx_mult;
             acc_value *= rx_mult;
             flashlight_value *= rx_mult;
+        }
+
+        // ── NF standalone system ─────────────────────────────────────
+        // NoFail has its own performance model (see nofail.rs):
+        //   * Incomplete plays (didn't finish) → pp = 0
+        //   * Short maps (combo < 1000) → map-combo-based tax, lightened
+        //     with more misses but pp always monotonically decreasing
+        //   * Long maps → symmetric midpoint-weighted miss scaling
+        //   * Per-miss gentle decay (0.97^n, floor 0.50)
+        //
+        // This replaces the old NF multiplier (1 − 0.02×misses) and the
+        // CC V3 exponential (which returns 1.0 on NF).
+        if self.mods.nf() {
+            let nf_mult = super::nofail::nf_multiplier(
+                self.attrs.max_combo,
+                self.state.max_combo,
+                self.state.hitresults.misses,
+                self.state.hitresults.total_hits(),
+                self.attrs.n_objects(),
+            );
+
+            pp *= nf_mult;
+            aim_value *= nf_mult;
+            speed_value *= nf_mult;
+            acc_value *= nf_mult;
+            flashlight_value *= nf_mult;
         }
 
         // ── Targeted PP-layer nerfs ─────────────────────────────────
@@ -810,18 +839,94 @@ impl OsuPerformanceCalculator<'_> {
 
     /// CC V3 exponential consistency multiplier (non-RX, non-AP).
     /// RX and AP use their own standalone miss systems and bypass this.
+    ///
+    /// Includes n50 effective miss inflation:
+    ///   * OD scaling — exponential, steep below OD 5. At OD ≤ 1 each
+    ///     n50 counts as 1 full effective miss. At OD 10 they don't count.
+    ///   * AR scaling — AR ≥ 9 = full n50 misses (hard to read = more 50s
+    ///     expected from aim, not timing). AR 7–9 = linear taper. AR < 7 = 0.
+    ///   * Combo factor — for maps ≥ 1300 max_combo, the n50 miss count
+    ///     decreases as combo grows, reaching 0 at max_combo 10000.
+    ///     Maps under 1300 get full n50 misses.
+    ///   * EZ and NF — n50 misses removed entirely. EZ is low AR (hard to
+    ///     read), NF is meant to make the game easier.
     fn apply_cc_v3_multiplier(&self, effective_miss_count: f64) -> f64 {
-        if effective_miss_count <= 0.0 {
+        if effective_miss_count <= 0.0 && self.state.hitresults.n50 == 0 {
             return 1.0;
         }
 
-        // RX and AP use standalone systems
-        if self.mods.rx() || self.mods.ap() {
+        // RX, AP, and NF use standalone systems
+        if self.mods.rx() || self.mods.ap() || self.mods.nf() {
             return 1.0;
         }
 
+        let od = self.attrs.od();
+        let ar = self.attrs.ar;
         let map_max_combo = self.attrs.max_combo;
-        let misses = effective_miss_count;
+        let n50 = self.state.hitresults.n50;
+        let is_ez = self.mods.ez();
+        let is_nf = self.mods.nf();
+
+        // ── n50 effective miss inflation ─────────────────────────────
+        //
+        // n50_eff_misses = n50 × od_factor × ar_factor × combo_factor
+        //
+        // OD factor: ((10 − od) / 9)³, clamped to [0, 1].
+        //   OD ≤ 1 → 1.000     (each n50 = full miss)
+        //   OD  3  → 0.470
+        //   OD  5  → 0.171     (steep drop-off below here)
+        //   OD  7  → 0.037
+        //   OD  9  → 0.001
+        //   OD 10  → 0.000
+        //
+        // AR factor:
+        //   AR ≥ 9 → 1.0       (always max n50 misses)
+        //   AR  8  → 0.5       (linear taper)
+        //   AR ≤ 7 → 0.0       (n50 misses don't count — low AR hard to read)
+        //
+        // Combo factor (maps ≥ 1300 max_combo only):
+        //   Scales linearly from 1.0 at combo 1300 to 0.0 at combo 10000.
+        //   Maps under 1300: combo_factor = 1.0 (no reduction).
+        //
+        // EZ or NF: n50 misses removed entirely.
+
+        let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
+            0.0
+        } else {
+            // OD factor: exponential, steep below OD 5
+            let od_factor = if od <= 1.0 {
+                1.0
+            } else {
+                ((10.0 - od) / 9.0).powf(3.0).clamp(0.0, 1.0)
+            };
+
+            // AR factor: AR >= 9 full, AR 7-9 linear, AR < 7 zero
+            let ar_factor = if ar >= 9.0 {
+                1.0
+            } else if ar >= 7.0 {
+                (ar - 7.0) / 2.0
+            } else {
+                0.0
+            };
+
+            // Combo factor: maps >= 1300 combo scale down, 0 at 10000
+            let combo_factor = if map_max_combo >= 1300 {
+                (1.0 - (f64::from(map_max_combo) - 1300.0) / (10000.0 - 1300.0))
+                    .clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+
+            f64::from(n50) * od_factor * ar_factor * combo_factor
+        };
+
+        let misses = effective_miss_count + n50_eff_misses;
+
+        if misses <= 0.0 {
+            return 1.0;
+        }
+
+        // ── Exponential consistency model ────────────────────────────
         let mut p: f64 = 0.998;
 
         if self.mods.dt() && self.mods.hr() { p += 0.0025; }
