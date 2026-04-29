@@ -1,5 +1,7 @@
 # rosu based combo consistency
-CCV3 based off of rosu-pp instead of akatsuki-pp
+CCV3 based off of rosu-pp instead of akatsuki-pp.
+Originally made in case the akatsuki based pp system isnt compatible.
+Now it serves as the main CCV3 pp system since rosu is easier to work with (but the system itself is more complex imo)
 
 # TODO
 
