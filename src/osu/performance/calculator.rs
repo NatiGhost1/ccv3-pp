@@ -256,6 +256,8 @@ impl OsuPerformanceCalculator<'_> {
                 self.state.hitresults.misses,
                 self.state.hitresults.total_hits(),
                 self.attrs.n_objects(),
+                acc,
+                self.attrs.hp,
             );
 
             pp *= nf_mult;
@@ -888,9 +890,9 @@ impl OsuPerformanceCalculator<'_> {
         //   Scales linearly from 1.0 at combo 1300 to 0.0 at combo 10000.
         //   Maps under 1300: combo_factor = 1.0 (no reduction).
         //
-        // EZ or NF: n50 misses removed entirely.
+        // EZ: n50 misses removed entirely.
 
-        let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
+        let n50_eff_misses = if (is_ez) || n50 == 0 {
             0.0
         } else {
             // OD factor: exponential, steep below OD 5
@@ -910,7 +912,7 @@ impl OsuPerformanceCalculator<'_> {
             };
 
             // Combo factor: maps >= 1300 combo scale down, 0 at 10000
-            let combo_factor = if map_max_combo >= 1300 {
+            let combo_factor = if map_max_combo >= 1300 && !is_nf {
                 (1.0 - (f64::from(map_max_combo) - 1300.0) / (10000.0 - 1300.0))
                     .clamp(0.0, 1.0)
             } else {
@@ -927,6 +929,9 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         // ── Exponential consistency model ────────────────────────────
+        // TODO: This logic is temporary and will be replaced with a more 
+        // robust and advanced exponential miss system in a future update.
+
         let mut p: f64 = 0.998;
 
         if self.mods.dt() && self.mods.hr() { p += 0.0025; }

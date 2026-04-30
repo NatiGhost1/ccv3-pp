@@ -1,14 +1,18 @@
-// CC V3: Relax-specific aim evaluator for rosu-pp.
+// CC V3: Relax-specific aim evaluator for rosu-pp (v3).
 //
-// Based on rosu-pp's AimEvaluator (evaluators/aim.rs) with:
-//   * Uplifted angle multipliers for RX-relevant patterns
-//   * Windowed angle variance (replaces pairwise repetition)
-//   * Slow-slider velocity taper
-//   * Cross-screen constant-distance nerf
-//   * Distance-gated extreme flow aim nerf
-//   * High-BPM repetition buff preserved
+// Enhancements over v2:
+//   * N/X pattern detection — alternating zigzag and crossover patterns
+//     that are trivial on RX are detected via angle pair analysis and
+//     distance consistency, with dedicated nerfs.
+//   * Aim slop detection — constant velocity + constant distance +
+//     constant angle windows = mechanical slop, progressively nerfed.
+//   * Tech pattern boost — high angle variance + high velocity change
+//     ratio = genuine tech, rewarded with reduced nerf or small buff.
+//   * Akat calibration — output is scaled down by AKAT_CALIBRATION so
+//     the final pp approximately matches ccv3-pp-rs output despite
+//     rosu's higher SKILL_MULTIPLIER and wider angle bonus shapes.
 //
-// Uses rosu's formula structure (smoothstep/smootherstep, adjusted_delta_time,
+// Uses rosu's formula base (smoothstep/smootherstep, adjusted_delta_time,
 // wiggle_bonus, small_circle_bonus, DIAMETER-based gating).
 
 use std::f64::consts::PI;
@@ -24,7 +28,7 @@ use crate::{
 
 pub struct AimRxEvaluator;
 
-// ─── Windowed angle statistics ──────────────────────────────────────
+// ─── Windowed statistics helpers ────────────────────────────────────
 
 const ANGLE_WINDOW: usize = 8;
 
@@ -58,12 +62,11 @@ fn windowed_angle_stats<'a>(
     (mean, variance.sqrt(), n)
 }
 
-/// Average lazy_jump_dist over a lookback window.
-fn windowed_dist_mean<'a>(
+fn windowed_dist_stats<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
     window: usize,
-) -> (f64, usize) {
+) -> (f64, f64, usize) {
     let mut dists: Vec<f64> = Vec::with_capacity(window + 1);
     dists.push(curr.lazy_jump_dist);
 
@@ -76,36 +79,147 @@ fn windowed_dist_mean<'a>(
     }
 
     let n = dists.len();
-    if n == 0 {
-        return (0.0, 0);
+    if n < 2 {
+        return (0.0, 0.0, n);
     }
-    (dists.iter().sum::<f64>() / n as f64, n)
+    let mean = dists.iter().sum::<f64>() / n as f64;
+    let var = dists.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt(), n)
+}
+
+fn windowed_vel_stats<'a>(
+    curr: &'a OsuDifficultyObject<'a>,
+    diff_objects: &'a [OsuDifficultyObject<'a>],
+    window: usize,
+) -> (f64, f64, usize) {
+    let mut vels: Vec<f64> = Vec::with_capacity(window + 1);
+    if curr.adjusted_delta_time > 0.0 {
+        vels.push(curr.lazy_jump_dist / curr.adjusted_delta_time);
+    }
+
+    for back in 0..window {
+        if let Some(prev) = curr.previous(back, diff_objects) {
+            if prev.adjusted_delta_time > 0.0 {
+                vels.push(prev.lazy_jump_dist / prev.adjusted_delta_time);
+            }
+        } else {
+            break;
+        }
+    }
+
+    let n = vels.len();
+    if n < 2 {
+        return (0.0, 0.0, n);
+    }
+    let mean = vels.iter().sum::<f64>() / n as f64;
+    let var = vels.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt(), n)
+}
+
+/// Detect N/X alternating patterns: look at consecutive angle pairs
+/// and check if they alternate between two values (±tolerance).
+fn detect_nx_pattern<'a>(
+    curr: &'a OsuDifficultyObject<'a>,
+    diff_objects: &'a [OsuDifficultyObject<'a>],
+    window: usize,
+) -> f64 {
+    let mut angles: Vec<f64> = Vec::with_capacity(window + 1);
+    if let Some(a) = curr.angle {
+        angles.push(a);
+    }
+    for back in 0..window {
+        if let Some(prev) = curr.previous(back, diff_objects) {
+            if let Some(a) = prev.angle {
+                angles.push(a);
+            }
+        } else {
+            break;
+        }
+    }
+
+    if angles.len() < 4 {
+        return 0.0;
+    }
+
+    // Check alternation: angles should alternate between two clusters.
+    // even[i] ≈ even[j], odd[i] ≈ odd[j], but even ≠ odd.
+    let evens: Vec<f64> = angles.iter().step_by(2).copied().collect();
+    let odds: Vec<f64> = angles.iter().skip(1).step_by(2).copied().collect();
+
+    if evens.len() < 2 || odds.len() < 2 {
+        return 0.0;
+    }
+
+    let even_mean = evens.iter().sum::<f64>() / evens.len() as f64;
+    let odd_mean = odds.iter().sum::<f64>() / odds.len() as f64;
+
+    let even_var = evens.iter().map(|a| (a - even_mean).powi(2)).sum::<f64>() / evens.len() as f64;
+    let odd_var = odds.iter().map(|a| (a - odd_mean).powi(2)).sum::<f64>() / odds.len() as f64;
+
+    let even_stddev = even_var.sqrt();
+    let odd_stddev = odd_var.sqrt();
+
+    // Both clusters must be tight (stddev < 0.25 rad each)
+    // AND the two clusters must be different (|mean_diff| > 0.3 rad)
+    let cluster_tight = even_stddev < 0.25 && odd_stddev < 0.25;
+    let clusters_differ = (even_mean - odd_mean).abs() > 0.3;
+
+    if cluster_tight && clusters_differ {
+        // Strength: how tight × how different
+        let tightness = 1.0 - ((even_stddev + odd_stddev) / 0.50).clamp(0.0, 1.0);
+        let separation = ((even_mean - odd_mean).abs() / PI).clamp(0.0, 1.0);
+        tightness * separation
+    } else {
+        0.0
+    }
 }
 
 impl AimRxEvaluator {
-    // Uplifted from rosu vanilla (1.5 / 2.55 / 1.35 / 0.75 / 1.02)
-    // Same % uplift as the akat-based version relative to its vanilla.
-    const WIDE_ANGLE_MULTIPLIER: f64 = 1.62;    // +8% vs rosu 1.5
-    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.75;   // +8% vs rosu 2.55
-    const SLIDER_MULTIPLIER: f64 = 1.20;        // -11% (sliders farmed on RX)
-    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.84; // +12% (vel change = real aim)
-    const WIGGLE_MULTIPLIER: f64 = 1.02;        // same as vanilla
+    // Recalibrated constants to produce akat-equivalent pp output.
+    // rosu SKILL_MULTIPLIER is 26.0 vs akat's 25.18 (+3.3%), and
+    // rosu's angle shapes (smoothstep) produce wider bonuses than
+    // akat's sin². These constants compensate so the final strain
+    // output roughly matches what akat-pp would produce.
+    //
+    // Derivation: akat_rx / akat_vanilla × rosu_vanilla × (25.18/26.0)
+    //   Wide:  1.56/1.45 × 1.5 × 0.968 = 1.56
+    //   Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
+    //   Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
+    //   VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
+    const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
+    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
+    const SLIDER_MULTIPLIER: f64 = 1.16;
+    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
+    const WIGGLE_MULTIPLIER: f64 = 1.02;
 
-    // Slow slider taper
+    // Calibration scalar: brings the full evaluator output to
+    // akat-equivalent magnitude. Applied at the very end.
+    // Accounts for the cumulative difference in angle bonus shapes
+    // (smoothstep is broader than sin²) plus SKILL_MULTIPLIER gap.
+    const AKAT_CALIBRATION: f64 = 0.92;
+
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
-    // Cross-screen constant-distance nerf
     const CONSTANT_DIST_RATIO: f64 = 0.18;
     const EDGE_TO_EDGE_THRESHOLD: f64 = 400.0;
     const CONSTANT_DIST_BPM_STRAIN_TIME: f64 = 85.7;
 
-    // Flow aim nerf (distance-gated)
     const FLOW_MEAN_ANGLE_THRESHOLD: f64 = 2.0;
     const FLOW_STDDEV_THRESHOLD: f64 = 0.3;
     const FLOW_MAX_NERF: f64 = 0.50;
     const FLOW_BPM_STRAIN_TIME: f64 = 36.58;
     const FLOW_DIST_FULL_NERF: f64 = 50.0;
-    const FLOW_DIST_EXEMPT: f64 = 120.0;
+    const FLOW_DIST_EXEMPT: f64 = 97.0;
+
+    // N/X pattern nerf: max cut when a strong alternating pattern is
+    // detected at low BPM. Fades at high BPM (genuinely hard to hold).
+    const NX_MAX_NERF: f64 = 0.30;
+
+    // Aim slop: max nerf for constant-everything patterns.
+    const SLOP_MAX_NERF: f64 = 0.35;
+
+    // Tech boost: max bonus for high-variance patterns.
+    const TECH_MAX_BOOST: f64 = 0.08;
 
     pub fn evaluate_diff_of<'a>(
         curr: &'a OsuDifficultyObject<'a>,
@@ -125,7 +239,7 @@ impl AimRxEvaluator {
         const RADIUS: i32 = OsuDifficultyObject::NORMALIZED_RADIUS;
         const DIAMETER: i32 = OsuDifficultyObject::NORMALIZED_DIAMETER;
 
-        // ── Velocities (using adjusted_delta_time like rosu) ────────
+        // ── Velocities ──────────────────────────────────────────────
         let mut curr_vel = osu_curr_obj.lazy_jump_dist / osu_curr_obj.adjusted_delta_time;
 
         if osu_last_obj.base.is_slider() && with_slider_travel_dist {
@@ -150,11 +264,10 @@ impl AimRxEvaluator {
 
         let mut aim_strain = curr_vel;
 
-        // ── Angle bonuses (rosu-style smoothstep) ───────────────────
+        // ── Angle bonuses ───────────────────────────────────────────
         if let Some((curr_angle, last_angle)) = osu_curr_obj.angle.zip(osu_last_obj.angle) {
             let angle_bonus = curr_vel.min(prev_vel);
 
-            // Rhythm consistency check (same as vanilla)
             if osu_curr_obj
                 .adjusted_delta_time
                 .max(osu_last_obj.adjusted_delta_time)
@@ -165,7 +278,6 @@ impl AimRxEvaluator {
             {
                 acute_angle_bonus = Self::calc_acute_angle_bonus(curr_angle);
 
-                // Vanilla-style pairwise acute repetition penalty
                 acute_angle_bonus *= 0.08
                     + 0.92
                         * (1.0
@@ -174,7 +286,6 @@ impl AimRxEvaluator {
                                 f64::powf(Self::calc_acute_angle_bonus(last_angle), 3.0),
                             ));
 
-                // BPM + distance gating (rosu smootherstep)
                 acute_angle_bonus *= angle_bonus
                     * smootherstep(
                         milliseconds_to_bpm(osu_curr_obj.adjusted_delta_time, Some(2)),
@@ -190,9 +301,7 @@ impl AimRxEvaluator {
 
             wide_angle_bonus = Self::calc_wide_angle_bonus(curr_angle);
 
-            // ── Windowed variance repetition (CC V3 RX addition) ────
-            // Replaces vanilla pairwise wide penalty with a proper
-            // window-based variance measure.
+            // ── Windowed variance repetition ────────────────────────
             let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
             let high_bpm_t = ((eff_bpm - 410.0) / 90.0).clamp(0.0, 1.0);
 
@@ -212,7 +321,6 @@ impl AimRxEvaluator {
                 angle_bonus * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER))
                 * (1.0 - wide_penalty + wide_rep_buff).max(0.0);
 
-            // Wiggle bonus (preserved from rosu vanilla)
             wiggle_bonus = angle_bonus
                 * smootherstep(
                     osu_curr_obj.lazy_jump_dist,
@@ -243,7 +351,6 @@ impl AimRxEvaluator {
                 )
                 * smootherstep(last_angle, f64::to_radians(110.0), f64::to_radians(60.0));
 
-            // Stacked object penalty (from rosu vanilla)
             if let Some(osu_last_2_obj) = curr.previous(2, diff_objects) {
                 let distance =
                     (osu_last_2_obj.base.stacked_pos() - osu_last_obj.base.stacked_pos()).length();
@@ -253,7 +360,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Velocity change bonus (rosu smoothstep) ─────────────────
+        // ── Velocity change bonus ───────────────────────────────────
         if prev_vel.max(curr_vel).not_eq(0.0) {
             prev_vel = (osu_last_obj.lazy_jump_dist + osu_last_last_obj.travel_dist)
                 / osu_last_obj.adjusted_delta_time;
@@ -283,7 +390,7 @@ impl AimRxEvaluator {
             vel_change_bonus *= bonus_base.powf(2.0);
         }
 
-        // ── Slider bonus with slow-slider taper (CC V3 RX) ─────────
+        // ── Slider bonus with slow-slider taper ─────────────────────
         if osu_last_obj.base.is_slider() {
             let travel_vel = osu_last_obj.travel_dist / osu_last_obj.travel_time;
             slider_bonus = travel_vel;
@@ -294,7 +401,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Combine (rosu order) ────────────────────────────────────
+        // ── Combine ─────────────────────────────────────────────────
         aim_strain += wiggle_bonus * Self::WIGGLE_MULTIPLIER;
         aim_strain += vel_change_bonus * Self::VELOCITY_CHANGE_MULTIPLIER;
 
@@ -307,7 +414,102 @@ impl AimRxEvaluator {
             aim_strain += slider_bonus * Self::SLIDER_MULTIPLIER;
         }
 
-        // ── Cross-screen constant-distance nerf (CC V3 RX) ─────────
+        // ═════════════════════════════════════════════════════════════
+        // CC V3 RX-specific nerfs and boosts (post-combine)
+        // ═════════════════════════════════════════════════════════════
+
+        let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
+
+        // ── N/X alternating pattern nerf ─────────────────────────────
+        // N patterns (zigzag) and X patterns (crossover) are trivial on
+        // RX because the cursor just bounces between two positions.
+        // Detection: check if consecutive angles alternate between two
+        // tight clusters. Nerf fades at high BPM (genuinely hard).
+        {
+            let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if nx_strength > 0.05 {
+                // Also check distance consistency — true N/X has constant spacing
+                let (dist_mean, dist_stddev, dist_n) =
+                    windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+                let dist_cv = if dist_mean > 0.0 && dist_n >= 3 {
+                    dist_stddev / dist_mean
+                } else {
+                    1.0
+                };
+
+                // Constant distance (low CV) amplifies the nerf
+                let dist_consistency = (1.0 - (dist_cv / 0.20).clamp(0.0, 1.0)).max(0.0);
+
+                // BPM fade: full nerf below 350, fades to 0 at 500+
+                let bpm_fade = 1.0 - ((eff_bpm - 350.0) / 150.0).clamp(0.0, 1.0);
+
+                let nx_severity = nx_strength * dist_consistency * bpm_fade;
+                aim_strain *= 1.0 - Self::NX_MAX_NERF * nx_severity;
+            }
+        }
+
+        // ── Aim slop detection ──────────────────────────────────────
+        // Constant velocity + constant distance + low angle variance
+        // = mechanical slop. The cursor follows a predictable path.
+        // This catches patterns that N/X detection misses (e.g. linear
+        // back-and-forth, square patterns, constant-speed circles).
+        {
+            let (_, angle_stddev, angle_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (dist_mean, dist_stddev, dist_n) =
+                windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (vel_mean, vel_stddev, vel_n) =
+                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if angle_n >= 4 && dist_n >= 4 && vel_n >= 4 {
+                // Angle uniformity: stddev < 0.3 = highly uniform
+                let angle_uniformity = (1.0 - (angle_stddev / 0.3).clamp(0.0, 1.0)).max(0.0);
+
+                // Distance uniformity: CV < 0.15 = very constant spacing
+                let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 1.0 };
+                let dist_uniformity = (1.0 - (dist_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
+
+                // Velocity uniformity: CV < 0.15 = constant speed
+                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 1.0 };
+                let vel_uniformity = (1.0 - (vel_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
+
+                // All three must be uniform for the nerf to fire
+                let slop_severity = angle_uniformity * dist_uniformity * vel_uniformity;
+
+                // BPM fade: less severe at high BPM
+                let bpm_fade = 1.0 - ((eff_bpm - 400.0) / 150.0).clamp(0.0, 1.0);
+
+                aim_strain *= 1.0 - Self::SLOP_MAX_NERF * slop_severity * bpm_fade;
+            }
+        }
+
+        // ── Tech pattern boost ──────────────────────────────────────
+        // High angle variance + high velocity change = genuine tech.
+        // These patterns are hard on RX because the cursor must react
+        // to unpredictable movements. Small boost to offset the global
+        // nerfs that might accidentally clip tech sections.
+        {
+            let (_, angle_stddev, angle_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (vel_mean, vel_stddev, vel_n) =
+                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if angle_n >= 4 && vel_n >= 4 {
+                // High angle variance: stddev > 0.6 = varied
+                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
+
+                // High velocity variance: CV > 0.25 = real speed changes
+                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
+                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
+
+                let tech_signal = angle_variety * vel_variety;
+                aim_strain *= 1.0 + Self::TECH_MAX_BOOST * tech_signal;
+            }
+        }
+
+        // ── Cross-screen constant-distance nerf ─────────────────────
         if osu_curr_obj.adjusted_delta_time >= Self::CONSTANT_DIST_BPM_STRAIN_TIME {
             let curr_d = osu_curr_obj.lazy_jump_dist;
             let prev_d = osu_last_obj.lazy_jump_dist;
@@ -334,7 +536,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Extreme flow aim nerf (distance-gated, CC V3 RX) ────────
+        // ── Extreme flow aim nerf (distance-gated) ──────────────────
         if osu_curr_obj.adjusted_delta_time >= Self::FLOW_BPM_STRAIN_TIME {
             let (flow_mean, flow_stddev, flow_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
@@ -352,8 +554,8 @@ impl AimRxEvaluator {
                         .clamp(0.0, 1.0);
                     let angle_severity = stddev_severity * mean_severity;
 
-                    let (avg_dist, dist_n) =
-                        windowed_dist_mean(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+                    let (avg_dist, _, dist_n) =
+                        windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
                     let dist_factor = if dist_n < 3 {
                         0.5
@@ -371,6 +573,9 @@ impl AimRxEvaluator {
                 }
             }
         }
+
+        // ── Akat calibration ────────────────────────────────────────
+        aim_strain *= Self::AKAT_CALIBRATION;
 
         aim_strain
     }
