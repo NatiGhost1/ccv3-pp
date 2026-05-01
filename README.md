@@ -2,9 +2,9 @@
 
 This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-pp`. While initially conceived as a fallback for potential compatibility issues with the modified Akatsuki system, it has been promoted to the primary implementation due to `rosu`'s superior developer experience—despite the underlying logic being more sophisticated.
 
-## OSU!STD
-
 ## Development Roadmap
+
+## OSU!STD
 
 ### Judgment & Miss Rebalancing
 - Harshen the performance penalty for misses to heighten difficulty scaling.
@@ -41,9 +41,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## OSU!TAIKO
 
-## Development Roadmap
-
 ### Research OSU!TAIKO PP System
-- Need to know how it works before I can do anything
+- Need to know how it works before I can do anything lol
 
 
