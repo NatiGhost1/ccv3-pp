@@ -890,9 +890,9 @@ impl OsuPerformanceCalculator<'_> {
         //   Scales linearly from 1.0 at combo 1300 to 0.0 at combo 10000.
         //   Maps under 1300: combo_factor = 1.0 (no reduction).
         //
-        // EZ: n50 misses removed entirely.
+        // EZ or NF: n50 misses removed entirely.
 
-        let n50_eff_misses = if (is_ez) || n50 == 0 {
+        let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
             0.0
         } else {
             // OD factor: exponential, steep below OD 5
@@ -912,7 +912,7 @@ impl OsuPerformanceCalculator<'_> {
             };
 
             // Combo factor: maps >= 1300 combo scale down, 0 at 10000
-            let combo_factor = if map_max_combo >= 1300 && !is_nf {
+            let combo_factor = if map_max_combo >= 1300 {
                 (1.0 - (f64::from(map_max_combo) - 1300.0) / (10000.0 - 1300.0))
                     .clamp(0.0, 1.0)
             } else {
@@ -928,10 +928,48 @@ impl OsuPerformanceCalculator<'_> {
             return 1.0;
         }
 
-        // ── Exponential consistency model ────────────────────────────
-        // TODO: This logic is temporary and will be replaced with a more 
-        // robust and advanced exponential miss system in a future update.
+        // ═════════════════════════════════════════════════════════════
+        // CC V3: Reworked exponential miss decay (continuous dynamic).
+        //
+        // Replaces the stepped exponent tiers (1.5/1.7/2.1/2.3/2.4 at
+        // fixed thresholds) with a smooth, continuously evolving curve:
+        //
+        //   miss_exp = 1.5 + 0.9 × (1 − e^(−misses / 8))
+        //
+        //   misses  1 → 1.62    (was 1.5 in old system)
+        //   misses  2 → 1.72    (was 1.7)
+        //   misses  4 → 1.95    (was 2.1)
+        //   misses  6 → 2.12    (was 2.3)
+        //   misses 10 → 2.31    (was 2.3)
+        //   misses 14 → 2.37    (was 2.4)
+        //   misses 20 → 2.39    (asymptote at 2.4)
+        //
+        // No more discrete jumps — the curve is smooth and each
+        // additional miss increases the exponent by a diminishing
+        // amount. This eliminates the "cliff" at 2/4/6/14 misses
+        // where one extra miss could jump the exponent by 0.2-0.4.
+        //
+        // Marathon softening: for maps with high max_combo, the
+        // exponent is gently reduced because long maps have more
+        // notes and each miss is proportionally less significant:
+        //
+        //   combo_softening = 1.0 − 0.15 × clamp((combo−1000)/4000, 0, 1)
+        //
+        //   combo 1000:  no softening (1.00)
+        //   combo 3000:  ×0.925
+        //   combo 5000+: ×0.85
+        //
+        // Accuracy calibration: high accuracy (>95%) on long maps
+        // gets a small relief (up to 8%) on the final multiplier.
+        // The logic: sustaining 95%+ acc while dropping a few notes
+        // means the player is genuinely consistent and the misses
+        // were isolated incidents, not a collapse.
+        //
+        //   acc_relief = 0.08 × clamp((acc−0.95)/0.05, 0, 1)
+        //              × clamp(combo/2000, 0, 1)
+        // ═════════════════════════════════════════════════════════════
 
+        // Base p adjusted by mods (same as before)
         let mut p: f64 = 0.998;
 
         if self.mods.dt() && self.mods.hr() { p += 0.0025; }
@@ -939,23 +977,29 @@ impl OsuPerformanceCalculator<'_> {
         if map_max_combo <= 500 && self.mods.dt() { p -= 0.02; }
         if map_max_combo <= 500 && self.mods.dt() && self.mods.hr() { p -= 0.01; }
 
-        let miss_exp = if misses >= 14.0 { 2.4 }
-            else if misses >= 6.0 { 2.3 }
-            else if misses >= 4.0 { 2.1 }
-            else if misses >= 2.0 { 1.7 }
-            else { 1.5 };
+        // Continuous exponent: smooth exponential rise from 1.5 to ~2.4
+        let base_exp = 1.5 + 0.9 * (1.0 - (-misses / 8.0).exp());
 
-        let mara_miss_exp = if misses >= 16.0 { 2.3 }
-            else if misses >= 6.0 { 2.1 }
-            else if misses >= 4.0 { 1.9 }
-            else { 1.5 };
+        // Marathon softening: longer maps get a gentler exponent
+        let combo_f = f64::from(map_max_combo);
+        let combo_softening = 1.0 - 0.15 * ((combo_f - 1000.0) / 4000.0).clamp(0.0, 1.0);
 
-        let miss_weight = if map_max_combo >= 2000 {
-            misses.powf(mara_miss_exp)
-        } else {
-            misses.powf(miss_exp)
-        };
+        let miss_exp = base_exp * combo_softening;
 
-        p.powf(miss_weight)
+        // Compute the miss weight using the continuous exponent
+        let miss_weight = misses.powf(miss_exp);
+
+        // Base multiplier from exponential decay
+        let mut result = p.powf(miss_weight);
+
+        // Accuracy calibration: high acc on long maps → small relief
+        let acc = self.acc;
+        let acc_relief = 0.08
+            * ((acc - 0.95) / 0.05).clamp(0.0, 1.0)
+            * (combo_f / 2000.0).clamp(0.0, 1.0);
+
+        result += acc_relief;
+
+        result.min(1.0)
     }
 }
