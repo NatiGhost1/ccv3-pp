@@ -4,10 +4,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## Development Roadmap
 
-
-## OSU!STD
-
-### [TODO]
+### OSU!STD
 
 ### Judgment & Miss Rebalancing
 - Harshen the performance penalty for misses to heighten difficulty scaling.
