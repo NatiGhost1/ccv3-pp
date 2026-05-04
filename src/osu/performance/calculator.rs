@@ -895,6 +895,23 @@ impl OsuPerformanceCalculator<'_> {
         let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
             0.0
         } else {
+            // Determine how many 50s are "guaranteed" misses (at least 1)
+            let guaranteed_threshold = if od <= 3.0 && ar >= 9.0 {
+                3.0
+            } else if od <= 7.0 && ar >= 9.0 {
+                2.0
+            } else {
+                1.0
+            };
+
+            let n50_f = f64::from(n50);
+
+            // Count how many 50s are strictly guaranteed
+            let guaranteed_count = n50_f.min(guaranteed_threshold);
+
+            // Scale the remaining 50s
+            let remaining_n50 = (n50_f - guaranteed_count).max(0.0);
+            
             // OD factor: exponential, steep below OD 5
             let od_factor = if od <= 1.0 {
                 1.0
@@ -918,8 +935,9 @@ impl OsuPerformanceCalculator<'_> {
             } else {
                 1.0
             };
-
-            f64::from(n50) * od_factor * ar_factor * combo_factor
+            
+            // Total = (First X weighted at 1.0) + (The rest scaled down)
+            guaranteed_count + (remaining_n50 * od_factor * ar_factor * combo_factor)
         };
 
         let misses = effective_miss_count + n50_eff_misses;
