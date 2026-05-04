@@ -994,7 +994,7 @@ impl OsuPerformanceCalculator<'_> {
 
         // Accuracy calibration: high acc on long maps → small relief
         let acc = self.acc;
-        let acc_relief = 0.08
+        let acc_relief = 0.0
             * ((acc - 0.95) / 0.05).clamp(0.0, 1.0)
             * (combo_f / 2000.0).clamp(0.0, 1.0);
 
