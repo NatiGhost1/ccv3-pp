@@ -217,9 +217,20 @@ impl AimRxEvaluator {
 
     // Aim slop: max nerf for constant-everything patterns.
     const SLOP_MAX_NERF: f64 = 0.35;
+    const STACK_NERF_DECAY_PER_EXTRA: f64 = 0.12;
+    const STACK_NERF_DECAY_MIN: f64 = 0.70;
 
     // Tech boost: max bonus for high-variance patterns.
     const TECH_MAX_BOOST: f64 = 0.08;
+
+    fn nerf_stack_decay(active_nerf_count: usize) -> f64 {
+        if active_nerf_count <= 1 {
+            1.0
+        } else {
+            (1.0 - Self::STACK_NERF_DECAY_PER_EXTRA * (active_nerf_count - 1) as f64)
+                .max(Self::STACK_NERF_DECAY_MIN)
+        }
+    }
 
     pub fn evaluate_diff_of<'a>(
         curr: &'a OsuDifficultyObject<'a>,
@@ -419,6 +430,11 @@ impl AimRxEvaluator {
         // ═════════════════════════════════════════════════════════════
 
         let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
+        let mut active_nerf_count = 0;
+        let mut nx_nerf = 0.0;
+        let mut slop_nerf = 0.0;
+        let mut cross_screen_nerf = 0.0;
+        let mut flow_nerf = 0.0;
 
         // ── N/X alternating pattern nerf ─────────────────────────────
         // N patterns (zigzag) and X patterns (crossover) are trivial on
@@ -446,7 +462,10 @@ impl AimRxEvaluator {
                 let bpm_fade = 1.0 - ((eff_bpm - 350.0) / 150.0).clamp(0.0, 1.0);
 
                 let nx_severity = nx_strength * dist_consistency * bpm_fade;
-                aim_strain *= 1.0 - Self::NX_MAX_NERF * nx_severity;
+                nx_nerf = Self::NX_MAX_NERF * nx_severity;
+                if nx_nerf > 0.0 {
+                    active_nerf_count += 1;
+                }
             }
         }
 
@@ -481,7 +500,10 @@ impl AimRxEvaluator {
                 // BPM fade: less severe at high BPM
                 let bpm_fade = 1.0 - ((eff_bpm - 400.0) / 150.0).clamp(0.0, 1.0);
 
-                aim_strain *= 1.0 - Self::SLOP_MAX_NERF * slop_severity * bpm_fade;
+                slop_nerf = Self::SLOP_MAX_NERF * slop_severity * bpm_fade;
+                if slop_nerf > 0.0 {
+                    active_nerf_count += 1;
+                }
             }
         }
 
@@ -531,7 +553,10 @@ impl AimRxEvaluator {
                         - ((max_d - 80.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 80.0))
                             .clamp(0.0, 1.0);
                     let severity = ratio_factor * dist_factor;
-                    aim_strain *= 1.0 - 0.15 * severity;
+                    cross_screen_nerf = 0.15 * severity;
+                    if cross_screen_nerf > 0.0 {
+                        active_nerf_count += 1;
+                    }
                 }
             }
         }
@@ -569,9 +594,26 @@ impl AimRxEvaluator {
                     };
 
                     let combined = angle_severity * dist_factor;
-                    aim_strain *= 1.0 - Self::FLOW_MAX_NERF * combined;
+                    flow_nerf = Self::FLOW_MAX_NERF * combined;
+                    if flow_nerf > 0.0 {
+                        active_nerf_count += 1;
+                    }
                 }
             }
+        }
+
+        let nerf_stack_decay = Self::nerf_stack_decay(active_nerf_count);
+        if nx_nerf > 0.0 {
+            aim_strain *= 1.0 - nx_nerf * nerf_stack_decay;
+        }
+        if slop_nerf > 0.0 {
+            aim_strain *= 1.0 - slop_nerf * nerf_stack_decay;
+        }
+        if cross_screen_nerf > 0.0 {
+            aim_strain *= 1.0 - cross_screen_nerf * nerf_stack_decay;
+        }
+        if flow_nerf > 0.0 {
+            aim_strain *= 1.0 - flow_nerf * nerf_stack_decay;
         }
 
         // ── Akat calibration ────────────────────────────────────────
