@@ -4,8 +4,6 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 
 ## Development Roadmap
 
-## OSU!STD
-
 ### Judgment & Miss Rebalancing
 - Harshen the performance penalty for misses to heighten difficulty scaling.
 - **N50 Refactor:**
@@ -39,10 +37,3 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 ### Deterministic Fail Detection
 - Implement a 100% accurate, high-fidelity fail detection system.
 - Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
-
-## OSU!TAIKO
-
-### Research OSU!TAIKO PP System
-- Need to know how it works before I can do anything lol
-
-
