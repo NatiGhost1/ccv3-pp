@@ -17,6 +17,9 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 - Apply more aggressive scaling to the combo ratio factor.
 - Significantly increase the penalty for broken combos to ensure the final PP output better reflects play consistency.
 
+### (Possibly) Rework Relax Marathon Handling 
+- I feel like marathon handling could be better than it is now. However, right now idk what I want to improve or if I want to change it at all.
+
 ### System Integration & Porting
 - Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
 
