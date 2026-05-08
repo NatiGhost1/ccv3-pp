@@ -13,6 +13,7 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
     - **AR-Dependent Thresholding:** On specific AR values, the first 2–3 N50s are processed as 1 `effective_miss` each.
     - Revert to standard N50 scaling formulas immediately once this specific 2–3 count threshold is exceeded.
     - **NOTE** it is not only AR dependent OD plays a huge factor in the amount of n50's processed as 1 `effective_miss`.
+    - **NOTE** I believe I added this (if I did, I know for a fact it's either very basic or needs fixing) 
 
 ### Combo Weighting Overhaul
 - Apply more aggressive scaling to the combo ratio factor.
