@@ -201,7 +201,7 @@ impl DifficultyValues {
         // Compute dominant_tap_bpm
         if !object_strains.is_empty() && !speed_object_data.is_empty() {
             attrs.dominant_tap_bpm =
-                tap_bpm::dominant_tap_bpm(&object_strains, &speed_object_data, 0.10);
+                tap_bpm::dominant_tap_bpm_from_owned(&object_strains, &speed_object_data, 0.10);
         }
 
         // Compute speed rework multipliers
