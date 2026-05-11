@@ -915,7 +915,7 @@ impl OsuPerformanceCalculator<'_> {
             let remaining_scale = 0.55 + 0.45 * (od_factor * ar_factor);
             let remaining_scaled = remaining_n50.powf(1.12) * remaining_scale;
 
-            guaranteed_count + remaining_scaled
+            guaranteed_count + remaining_scaled;
             
             // OD factor: exponential, steep below OD 5
             let od_factor = if od <= 1.0 {
