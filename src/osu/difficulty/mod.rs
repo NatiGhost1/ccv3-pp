@@ -217,6 +217,19 @@ impl DifficultyValues {
             &speed_peaks,
         );
 
+        // Compute AP-only speed/rhythm local SR for autopilot marathon decay.
+        attrs.local_autopilot_sr_per_minute =
+            crate::osu::performance::auto_marathon::local_sr_per_minute(&speed_peaks);
+
+        // Compute AP-only aim intensity per minute used only to classify
+        // low-BPM, high-aim sections that should not be treated like marathons.
+        attrs.local_aim_per_minute =
+            crate::osu::performance::auto_marathon::local_aim_per_minute(&aim_peaks);
+
+        // Compute local_bpm_per_minute for autopilot marathon decay
+        let delta_times: Vec<f64> = diff_objects.iter().map(|obj| obj.adjusted_delta_time).collect();
+        attrs.local_bpm_per_minute = crate::osu::performance::auto_marathon::compute_local_bpm_per_minute(&diff_objects, &delta_times);
+
         // Compute avg_jump_dist and median_delta_time
         let mut dist_sum = 0.0;
         let mut dist_count = 0u32;

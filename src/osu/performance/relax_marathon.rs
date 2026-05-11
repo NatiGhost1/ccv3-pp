@@ -117,8 +117,12 @@ pub fn local_sr_per_minute(strains_aim: &[f64], strains_speed: &[f64]) -> Vec<f6
     out
 }
 
-pub fn relax_marathon_multiplier(local_sr: &[f64], params: MarathonDecayParams) -> f64 {
-    if local_sr.len() < 2 {
+pub fn relax_marathon_multiplier(
+    local_sr: &[f64],
+    local_bpm: &[f64],
+    params: MarathonDecayParams,
+) -> f64 {
+    if local_sr.len() < 2 || local_sr.len() != local_bpm.len() {
         return 1.0;
     }
 
@@ -133,7 +137,15 @@ pub fn relax_marathon_multiplier(local_sr: &[f64], params: MarathonDecayParams) 
             r = 0;
         }
 
-        let lambda = 1.0 / decay_divisor(r, params);
+        let mut lambda = 1.0 / decay_divisor(r, params);
+
+        // High-BPM 1/2 sections like 410 BPM are hard on relax even if they
+        // look marathon-like. So soften the relax marathon nerf as BPM climbs.
+        let bpm = local_bpm[k];
+        if bpm >= 400.0 {
+            let soften = ((bpm - 400.0) / 40.0).clamp(0.0, 1.0) * 0.15;
+            lambda += (1.0 - lambda) * soften;
+        }
 
         // Weight by SR so "dead minutes" don't dominate.
         weighted += sr * lambda;

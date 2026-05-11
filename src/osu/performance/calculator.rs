@@ -170,6 +170,7 @@ impl OsuPerformanceCalculator<'_> {
             let params = super::relax_marathon::MarathonDecayParams::default();
             let mult = super::relax_marathon::relax_marathon_multiplier(
                 &self.attrs.local_sr_per_minute,
+                &self.attrs.local_bpm_per_minute,
                 &params,
             );
             aim_value *= mult;
@@ -180,8 +181,10 @@ impl OsuPerformanceCalculator<'_> {
         if self.mods.ap() {
             let params = super::auto_marathon::AutopilotDecayParams::default();
             let mult = super::auto_marathon::autopilot_marathon_multiplier(
-                &self.attrs.local_sr_per_minute,
-                &params,
+                &self.attrs.local_autopilot_sr_per_minute,
+                &self.attrs.local_bpm_per_minute,
+                &self.attrs.local_aim_per_minute,
+                params,
             );
             speed_value *= mult;
             flashlight_value *= mult;
@@ -895,22 +898,24 @@ impl OsuPerformanceCalculator<'_> {
         let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
             0.0
         } else {
-            // Determine how many 50s are "guaranteed" misses (at least 1)
-            let guaranteed_threshold = if od <= 3.0 && ar >= 9.0 {
-                3.0
-            } else if od <= 7.0 && ar >= 9.0 {
-                2.0
-            } else {
-                1.0
-            };
+            // Smoothly derive an effective guaranteed miss threshold from OD and AR.
+            // Low OD + high AR should yield a higher guaranteed miss floor,
+            // but the result should be continuous rather than stepped.
+            let od_factor = ((7.0 - od).clamp(0.0, 4.0) / 4.0).powf(1.4);
+            let ar_factor = ((ar - 7.0).clamp(0.0, 2.0) / 2.0).powf(0.9);
 
+            let guaranteed_threshold = 1.0 + 2.0 * (od_factor * ar_factor).clamp(0.0, 1.0);
             let n50_f = f64::from(n50);
 
-            // Count how many 50s are strictly guaranteed
             let guaranteed_count = n50_f.min(guaranteed_threshold);
-
-            // Scale the remaining 50s
             let remaining_n50 = (n50_f - guaranteed_count).max(0.0);
+
+            // Use an exponent on the remaining 50s so they fade out smoothly
+            // instead of behaving like a hard count.
+            let remaining_scale = 0.55 + 0.45 * (od_factor * ar_factor);
+            let remaining_scaled = remaining_n50.powf(1.12) * remaining_scale;
+
+            guaranteed_count + remaining_scaled
             
             // OD factor: exponential, steep below OD 5
             let od_factor = if od <= 1.0 {

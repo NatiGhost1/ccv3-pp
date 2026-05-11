@@ -69,6 +69,12 @@ pub struct OsuDifficultyAttributes {
     pub speed_rework_mult_autopilot: f64,
     /// CC V3: per-minute local SR for Relax marathon decay.
     pub local_sr_per_minute: Vec<f64>,
+    /// CC V3: per-minute local SR for Autopilot marathon decay.
+    pub local_autopilot_sr_per_minute: Vec<f64>,
+    /// CC V3: per-minute local aim intensity for Autopilot section classification.
+    pub local_aim_per_minute: Vec<f64>,
+    /// CC V3: per-minute local BPM for Autopilot marathon decay.
+    pub local_bpm_per_minute: Vec<f64>,
     /// CC V3: mean pairwise object spacing (osu!px).
     pub avg_jump_dist: f64,
     /// CC V3: median delta across all objects (rate-adjusted ms).

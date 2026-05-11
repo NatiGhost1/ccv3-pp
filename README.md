@@ -2,26 +2,17 @@
 
 This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-pp`. While initially conceived as a fallback for potential compatibility issues with the modified Akatsuki system, it has been promoted to the primary implementation due to `rosu`'s superior developer experience—despite the underlying logic being more sophisticated. CCV3 is a fork of [`rosu-pp`](https://github.com/MaxOhn/rosu-pp).
 
-## Development Roadmap
+## Development Roadmap 
 
-### Judgment & Miss Rebalancing
-- Harshen the performance penalty for misses to heighten difficulty scaling.
-- **N50 Refactor:**
-    - Assign the first N50 a weight of 1 `effective_miss`.
-    - **AR-Dependent Thresholding:** On specific AR values, the first 2–3 N50s are processed as 1 `effective_miss` each.
-    - Revert to standard N50 scaling formulas immediately once this specific 2–3 count threshold is exceeded.
-    - **NOTE** it is not only AR dependent OD plays a huge factor in the amount of n50's processed as 1 `effective_miss`.
-    - **NOTE** I believe I added this (if I did, I know for a fact it's either very basic or needs fixing) 
-
-### Combo Weighting Overhaul
-- Apply more aggressive scaling to the combo ratio factor.
-- Significantly increase the penalty for broken combos to ensure the final PP output better reflects play consistency.
-
-### (Possibly) Rework Relax Marathon Handling 
-- I feel like marathon handling could be better than it is now. However, right now idk what I want to improve or if I want to change it at all.
+## [TODO]
 
 ### System Integration & Porting
 - Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
+
+## [POTENTIAL]
+
+### Buff Marathon Maps With a Relatively Equal Balance of Aim and Speed Strain in Vanilla
+- Instead of nerfing longer maps like RX and AP, reward longer maps that maintain a balance of aim and speed strain, rather than letting their value decay toward zero.
 
 ## [IMPLEMENTED] 
 
@@ -40,3 +31,22 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 ### Deterministic Fail Detection
 - Implement a 100% accurate, high-fidelity fail detection system.
 - Replace the current Claude-based heuristic detection with robust, deterministic logic to eliminate the inaccuracies and false readings inherent to the LLM approach.
+
+### Judgment & Miss Rebalancing
+- Harshen the performance penalty for misses to heighten difficulty scaling.
+- **N50 Refactor:**
+    - Assign the first N50 a weight of 1 `effective_miss`.
+    - **AR-Dependent Thresholding:** On specific AR values, the first 2–3 N50s are processed as 1 `effective_miss` each.
+    - Revert to standard N50 scaling formulas immediately once this specific 2–3 count threshold is exceeded.
+    - **NOTE** it is not only AR dependent OD plays a huge factor in the amount of n50's processed as 1 `effective_miss`.
+
+    ### Rework Relax & Autopilot Marathon Handling 
+- Rework Autopilot marathon decay to rely primarily on speed and rhythm rather than aim strain, with aim only used to detect low-BPM aim-heavy sections.
+- Add BPM-aware AP decay scaling and a small guaranteed nerf for maps longer than three minutes.
+- Restore and refine Relax marathon handling with high-BPM softening around 410 BPM and smoother BPM-based multiplier behavior.
+
+## [ABANDONED]
+
+### Combo Weighting Overhaul
+- Apply more aggressive scaling to the combo ratio factor.
+- Significantly increase the penalty for broken combos to ensure the final PP output better reflects play consistency.
