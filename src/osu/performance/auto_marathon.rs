@@ -16,7 +16,7 @@ impl Default for AutopilotDecayParams {
             tau: 4.0, // tau is 4 stars, so that almost all minutes are affected (legacy value was 0.50 but that may be too little for accurate nerfs on autopilot)
             bpm_tau: 5.0,
             b: 0.05,
-            q: 1.40,
+            q: 1.42,
             double_at: 3,
         }
     }
@@ -37,9 +37,7 @@ pub fn decay_divisor(r: u32, average_bpm: f64, p: AutopilotDecayParams) -> f64 {
 
     let base = 1.0 + p.b * (r as f64).powf(p.q) * bpm_factor;
     if r >= p.double_at {
-        1.15 * base
-    } else {
-        base
+        1.0 * base // AP has a more agressive decay curve, so the double_at multiplier is removed.
     } 
 }
 
@@ -200,9 +198,12 @@ pub fn autopilot_marathon_multiplier(
         let average_bpm = sum_bpm / count as f64;
         let mut lambda = 1.0 / decay_divisor(r, average_bpm, params);
 
-        // If a section is low BPM but shows high aim intensity, AP is still
-        // only tapping. Increase the decay slightly here, with more harshness
-        // over consecutive detected minutes, capped at 3 minutes.
+        // If a section is low BPM but shows high aim intensity, since AP is only tapping, 
+        // we can be more confident it's a relax-style section and less autopilot-like, 
+        // so apply an extra decay factor. The extra decay scales up with the aim ratio and with 
+        // consecutive low-BPM aim-heavy minutes, capped at 25% total extra decay. 
+        // This helps preserve more pp on maps with some relax-style sections, 
+        // while still applying a strong marathon nerf to maps that are consistently low BPM and aim-heavy.
         let aim = local_aim[k];
         let aim_ratio = if sr > 0.0 { aim / sr } else { 0.0 };
         if average_bpm <= 360.0 && aim_ratio > 0.7 {

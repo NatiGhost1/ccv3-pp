@@ -99,11 +99,6 @@ let base_speed_perf = strain::difficulty_to_performance(speed_rating);
 pub fn local_sr_per_minute(strains_aim: &[f64], strains_speed: &[f64]) -> Vec<f64> {
     let peaks_per_min = (MINUTE_MS / PEAK_SECTION_LEN_MS).round() as usize; // 150
     let n_minutes = strains_aim.len().div_ceil(peaks_per_min);
-
-
-
-    
-
     let mut out = Vec::with_capacity(n_minutes);
     for k in 0..n_minutes {
         let start = k * peaks_per_min;
