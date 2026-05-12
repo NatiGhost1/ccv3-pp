@@ -132,19 +132,12 @@ impl OsuPerformanceCalculator<'_> {
         let mut acc_value = self.compute_accuracy_value();
         let mut flashlight_value = self.compute_flashlight_value(effective_miss_count);
 
-        let mut pp = (aim_value.powf(1.1)
-            + speed_value.powf(1.1)
-            + acc_value.powf(1.1)
-            + flashlight_value.powf(1.1))
-        .powf(1.0 / 1.1)
-            * multiplier;
-
         // ═════════════════════════════════════════════════════════════
         // CC V3 additions to the performance pass
         // ═════════════════════════════════════════════════════════════
 
         // ── Speed rework multiplier ─────────────────────────────────
-        let speed_mult = if self.mods.ap() {
+        let _speed_mult = if self.mods.ap() {
             if self.attrs.speed_rework_mult_autopilot > 0.0 {
                 self.attrs.speed_rework_mult_autopilot
             } else {
@@ -155,15 +148,7 @@ impl OsuPerformanceCalculator<'_> {
         } else {
             1.0
         };
-        speed_value *= speed_mult;
-
-        // Recompute pp with the speed rework applied
-        pp = (aim_value.powf(1.1)
-            + speed_value.powf(1.1)
-            + acc_value.powf(1.1)
-            + flashlight_value.powf(1.1))
-        .powf(1.0 / 1.1)
-            * multiplier;
+        // speed_value *= speed_mult; // Disabled
 
         // ── Relax marathon decay ────────────────────────────────────
         if self.mods.rx() {
@@ -195,7 +180,6 @@ impl OsuPerformanceCalculator<'_> {
         let combo_tax = self.combo_ratio_tax();
         let ccv3_scale = ccv3_mult * combo_tax;
 
-        pp *= ccv3_scale;
         aim_value *= ccv3_scale;
         speed_value *= ccv3_scale;
         acc_value *= ccv3_scale;
@@ -215,14 +199,13 @@ impl OsuPerformanceCalculator<'_> {
                 self.state.max_combo,
                 self.attrs.max_combo,
             );
-            pp *= ap_mult;
             aim_value *= ap_mult;
             speed_value *= ap_mult;
             acc_value *= ap_mult;
             flashlight_value *= ap_mult;
         }
 
-        // ── RX standalone miss system ───────────────────────────────
+        // ── RX standalone miss system ─────────────────────────────────
         if self.mods.rx() && self.state.hitresults.misses > 0 {
             let rx_mult = super::rx_miss::rx_miss_multiplier(
                 &self.attrs.rx_chunk_hardness,
@@ -235,7 +218,6 @@ impl OsuPerformanceCalculator<'_> {
                 self.state.max_combo,
                 self.attrs.max_combo,
             );
-            pp *= rx_mult;
             aim_value *= rx_mult;
             speed_value *= rx_mult;
             acc_value *= rx_mult;
@@ -263,7 +245,6 @@ impl OsuPerformanceCalculator<'_> {
                 self.attrs.hp,
             );
 
-            pp *= nf_mult;
             aim_value *= nf_mult;
             speed_value *= nf_mult;
             acc_value *= nf_mult;
@@ -301,7 +282,7 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         // Recompute final pp with all nerfs
-        pp = (aim_value.powf(1.1)
+        let pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
             + acc_value.powf(1.1)
             + flashlight_value.powf(1.1))
@@ -915,34 +896,7 @@ impl OsuPerformanceCalculator<'_> {
             let remaining_scale = 0.55 + 0.45 * (od_factor * ar_factor);
             let remaining_scaled = remaining_n50.powf(1.12) * remaining_scale;
 
-            guaranteed_count + remaining_scaled;
-            
-            // OD factor: exponential, steep below OD 5
-            let od_factor = if od <= 1.0 {
-                1.0
-            } else {
-                ((10.0 - od) / 9.0).powf(3.0).clamp(0.0, 1.0)
-            };
-
-            // AR factor: AR >= 9 full, AR 7-9 linear, AR < 7 zero
-            let ar_factor = if ar >= 9.0 {
-                1.0
-            } else if ar >= 7.0 {
-                (ar - 7.0) / 2.0
-            } else {
-                0.0
-            };
-
-            // Combo factor: maps >= 1300 combo scale down, 0 at 10000
-            let combo_factor = if map_max_combo >= 1300 {
-                (1.0 - (f64::from(map_max_combo) - 1300.0) / (10000.0 - 1300.0))
-                    .clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            
-            // Total = (First X weighted at 1.0) + (The rest scaled down)
-            guaranteed_count + (remaining_n50 * od_factor * ar_factor * combo_factor)
+            guaranteed_count + remaining_scaled
         };
 
         let misses = effective_miss_count + n50_eff_misses;
@@ -1017,7 +971,7 @@ impl OsuPerformanceCalculator<'_> {
 
         // Accuracy calibration: high acc on long maps → small relief
         let acc = self.acc;
-        let acc_relief = 0.0
+        let acc_relief = 0.08
             * ((acc - 0.95) / 0.05).clamp(0.0, 1.0)
             * (combo_f / 2000.0).clamp(0.0, 1.0);
 

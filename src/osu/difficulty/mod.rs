@@ -180,7 +180,7 @@ impl DifficultyValues {
         // ═══ CC V3: extract data from diff_objects before they drop ═
         // Build SpeedObjectData for tap_bpm and speed_precal.
         // Also extract per-object speed strains from the speed skill.
-        let clock_rate = difficulty.get_clock_rate();
+        let _clock_rate = difficulty.get_clock_rate();
 
         let speed_object_data: Vec<tap_bpm::SpeedObjectData> = diff_objects
             .iter()

@@ -137,7 +137,7 @@ impl AimEvaluator {
     // magnitude. Rosu's SKILL_MULTIPLIER is 26.0 vs akat's 25.18 (+3.3%)
     // and the smoothstep angle shapes produce broader bonuses than akat's
     // sin². This scalar compensates at the end.
-    const AKAT_CALIBRATION: f64 = 0.94;
+    const AKAT_CALIBRATION: f64 = 0.94; // 0.94 was previous for right now its 1.0 for testing 
 
     // CC V3: N/X pattern nerf for vanilla aim (lighter than RX since
     // tapping + aiming N/X patterns is genuinely harder than on RX).

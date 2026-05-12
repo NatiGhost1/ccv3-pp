@@ -3,10 +3,12 @@ use crate::osu::performance::PERFORMANCE_BASE_MULTIPLIER;
 
 #[derive(Clone, Copy)]
 pub struct AutopilotDecayParams {
+    #[allow(dead_code)]
     pub tau: f64, // legacy SR tolerance; kept for compatibility but not used by the current AP decay logic.
     pub bpm_tau: f64, // BPM tolerance for grouping nearby minutes into a single streak.
     pub b: f64,   // base decay scaling factor.
     pub q: f64,   // exponent for streak length decay.
+    #[allow(dead_code)]
     pub double_at: u32, // streak length in minutes after which decay is slightly larger.
 }
 
@@ -16,7 +18,7 @@ impl Default for AutopilotDecayParams {
             tau: 4.0, // tau is 4 stars, so that almost all minutes are affected (legacy value was 0.50 but that may be too little for accurate nerfs on autopilot)
             bpm_tau: 5.0,
             b: 0.05,
-            q: 1.42,
+            q: 1.35,
             double_at: 3,
         }
     }

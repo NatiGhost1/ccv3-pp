@@ -5,6 +5,33 @@ use ccv3_pp::{Beatmap, Difficulty, GameMods, Performance};
 
 const DEFAULT_PLAYS: usize = 5;
 
+#[derive(Default)]
+struct SpecificPlay {
+    mods: Option<(String, GameModsLegacy)>,
+    combo: Option<u32>,
+    misses: Option<u32>,
+    accuracy: Option<f64>,
+}
+
+impl SpecificPlay {
+    fn is_empty(&self) -> bool {
+        self.mods.is_none() && self.combo.is_none() && self.misses.is_none() && self.accuracy.is_none()
+    }
+}
+
+fn print_usage(program: &str) {
+    eprintln!("Usage: {program} <beatmap.osu> [plays] [seed] [options]");
+    eprintln!("Options:");
+    eprintln!("  --mods <mods>       Specify mods like HDDT, HR, EZHD, RX, AP, or NoMod");
+    eprintln!("  --combo <combo>     Specify play combo");
+    eprintln!("  --misses <misses>   Specify play misses");
+    eprintln!("  --accuracy <acc>    Specify play accuracy in %");
+    eprintln!("  --plays <plays>     Number of plays to generate");
+    eprintln!("  --seed <seed>       Seed for random generation of unspecified fields");
+    eprintln!("  -h, --help          Show this help message");
+    eprintln!("Example: {program} ./resources/5553026.osu 1 12345 --mods HDDT --misses 150 --accuracy 95.42");
+}
+
 struct SimpleRng(u64);
 
 impl SimpleRng {
@@ -139,27 +166,130 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <beatmap.osu> [plays] [seed]\nExample: {} ./resources/2785319.osu 8 12345",
-            args[0], args[0]
-        );
+        print_usage(&args[0]);
         exit(1);
     }
 
     let map_path = PathBuf::from(&args[1]);
-    let plays = args
-        .get(2)
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_PLAYS);
-    let seed = args
-        .get(3)
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64
-        });
+    let mut plays = DEFAULT_PLAYS;
+    let mut seed = None;
+    let mut explicit = SpecificPlay::default();
+    let mut positional = 0;
+
+    let mut iter = args.iter().skip(2);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print_usage(&args[0]);
+                exit(0);
+            }
+            "--mods" | "-m" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --mods");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.mods = Some(parse_mods(value).unwrap_or_else(|| {
+                    eprintln!("Invalid mod string: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            "--combo" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --combo");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.combo = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid combo: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            "--misses" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --misses");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.misses = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid misses: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            "--accuracy" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --accuracy");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.accuracy = Some(parse_accuracy(value).unwrap_or_else(|| {
+                    eprintln!("Invalid accuracy: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            "--plays" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --plays");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                plays = value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid plays: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+            }
+            "--seed" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --seed");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                seed = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid seed: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            _ if arg.starts_with('-') => {
+                eprintln!("Unknown option: {arg}");
+                print_usage(&args[0]);
+                exit(1);
+            }
+            _ => {
+                if positional == 0 {
+                    plays = arg.parse().unwrap_or_else(|_| {
+                        eprintln!("Invalid plays: {arg}");
+                        print_usage(&args[0]);
+                        exit(1);
+                    });
+                    positional += 1;
+                } else if positional == 1 {
+                    seed = Some(arg.parse().unwrap_or_else(|_| {
+                        eprintln!("Invalid seed: {arg}");
+                        print_usage(&args[0]);
+                        exit(1);
+                    }));
+                    positional += 1;
+                } else {
+                    eprintln!("Unexpected argument: {arg}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }
+            }
+        }
+    }
+
+    let seed = seed.unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    });
 
     let mut rng = SimpleRng::new(seed);
     let map = match Beatmap::from_path(&map_path) {
@@ -175,22 +305,34 @@ fn main() {
     println!("BPM: {:.2}", map.bpm());
     println!("Total hitobjects: {}", map.hit_objects.len());
     println!("Seed: {seed}");
-    println!("Generating {plays} random plays...\n");
+
+    if explicit.is_empty() {
+        println!("Generating {plays} random plays...\n");
+    } else {
+        println!("Generating {plays} plays with explicit parameters...\n");
+    }
 
     for index in 1..=plays {
-        let (mod_list, mods_legacy) = build_random_mod_combo(&mut rng);
+        let (mod_list, mods_legacy) = if let Some((ref list, mods)) = explicit.mods {
+            (list.clone(), mods)
+        } else {
+            build_random_mod_combo(&mut rng)
+        };
+
         let mods = GameMods::from(mods_legacy);
 
         let diff_attrs = Difficulty::new().mods(mods.clone()).calculate(&map);
         let max_combo = diff_attrs.max_combo();
-        let misses = rng.gen_range(0, (max_combo / 15).max(1) + 1);
-        let combo = if misses == 0 {
-            max_combo
-        } else {
-            let lower_combo = (max_combo / 2).max(1);
-            rng.gen_range(lower_combo, max_combo + 1)
-        };
-        let accuracy = 90.0 + (rng.gen_range(0, 1001) as f64 / 100.0);
+        let misses = explicit.misses.unwrap_or_else(|| rng.gen_range(0, (max_combo / 15).max(1) + 1));
+        let combo = explicit.combo.unwrap_or_else(|| {
+            if misses == 0 {
+                max_combo
+            } else {
+                let lower_combo = (max_combo / 2).max(1);
+                rng.gen_range(lower_combo, max_combo + 1)
+            }
+        });
+        let accuracy = explicit.accuracy.unwrap_or_else(|| 90.0 + (rng.gen_range(0, 1001) as f64 / 100.0));
 
         let perf_attrs = Performance::new(diff_attrs)
             .mods(mods)
@@ -266,4 +408,166 @@ fn build_random_mod_combo(rng: &mut SimpleRng) -> (String, GameModsLegacy) {
     };
 
     (mod_list, mods)
+}
+
+fn parse_mods(input: &str) -> Option<(String, GameModsLegacy)> {
+    let mut s = input.to_lowercase();
+    s.retain(|c| !c.is_whitespace() && c != '+' && c != ',' && c != '/');
+
+    if s.is_empty() {
+        return None;
+    }
+
+    let mut mods = GameModsLegacy::NoMod;
+    let mut names: Vec<String> = Vec::new();
+
+    if s == "nomod" || s == "nm" {
+        return Some(("NoMod".to_string(), mods));
+    }
+
+    while !s.is_empty() {
+        let next = if let Some(rest) = s.strip_prefix("suddendeath") {
+            mods |= GameModsLegacy::SuddenDeath;
+            names.push("SuddenDeath".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("suddende") {
+            mods |= GameModsLegacy::SuddenDeath;
+            names.push("SuddenDeath".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("perfect") {
+            mods |= GameModsLegacy::Perfect;
+            names.push("Perfect".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("autopilot") {
+            mods |= GameModsLegacy::Autopilot;
+            names.push("Autopilot".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("flashlight") {
+            mods |= GameModsLegacy::Flashlight;
+            names.push("Flashlight".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("hardrock") {
+            mods |= GameModsLegacy::HardRock;
+            names.push("HardRock".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("doubletime") {
+            mods |= GameModsLegacy::DoubleTime;
+            names.push("DoubleTime".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("nightcore") {
+            mods |= GameModsLegacy::Nightcore;
+            names.push("Nightcore".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("halftime") {
+            mods |= GameModsLegacy::HalfTime;
+            names.push("HalfTime".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("nofail") {
+            mods |= GameModsLegacy::NoFail;
+            names.push("NoFail".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("spunout") {
+            mods |= GameModsLegacy::SpunOut;
+            names.push("SpunOut".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("mirror") {
+            mods |= GameModsLegacy::Mirror;
+            names.push("Mirror".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("relax") {
+            mods |= GameModsLegacy::Relax;
+            names.push("Relax".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("hidden") {
+            mods |= GameModsLegacy::Hidden;
+            names.push("Hidden".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("easy") {
+            mods |= GameModsLegacy::Easy;
+            names.push("Easy".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("hardrock") {
+            mods |= GameModsLegacy::HardRock;
+            names.push("HardRock".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("hr") {
+            mods |= GameModsLegacy::HardRock;
+            names.push("HardRock".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("hd") {
+            mods |= GameModsLegacy::Hidden;
+            names.push("Hidden".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("nf") {
+            mods |= GameModsLegacy::NoFail;
+            names.push("NoFail".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("ez") {
+            mods |= GameModsLegacy::Easy;
+            names.push("Easy".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("fl") {
+            mods |= GameModsLegacy::Flashlight;
+            names.push("Flashlight".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("so") {
+            mods |= GameModsLegacy::SpunOut;
+            names.push("SpunOut".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("nc") {
+            mods |= GameModsLegacy::Nightcore;
+            names.push("Nightcore".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("dt") {
+            mods |= GameModsLegacy::DoubleTime;
+            names.push("DoubleTime".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("ht") {
+            mods |= GameModsLegacy::HalfTime;
+            names.push("HalfTime".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("rx") {
+            mods |= GameModsLegacy::Relax;
+            names.push("Relax".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("ap") {
+            mods |= GameModsLegacy::Autopilot;
+            names.push("Autopilot".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("sd") {
+            mods |= GameModsLegacy::SuddenDeath;
+            names.push("SuddenDeath".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("pf") {
+            mods |= GameModsLegacy::Perfect;
+            names.push("Perfect".to_string());
+            rest
+        } else if let Some(rest) = s.strip_prefix("mr") {
+            mods |= GameModsLegacy::Mirror;
+            names.push("Mirror".to_string());
+            rest
+        } else {
+            return None;
+        };
+
+        s = next.to_string();
+    }
+
+    let mod_list = if names.is_empty() {
+        "NoMod".to_string()
+    } else {
+        names.into_iter().collect::<Vec<String>>().join(" + ")
+    };
+
+    Some((mod_list, mods))
+}
+
+fn parse_accuracy(value: &str) -> Option<f64> {
+    let normalized = value.strip_suffix('%').unwrap_or(value);
+    let acc = normalized.parse::<f64>().ok()?;
+    if (0.0..=100.0).contains(&acc) {
+        Some(acc)
+    } else {
+        None
+    }
 }
