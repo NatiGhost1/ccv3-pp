@@ -186,10 +186,10 @@ impl AimRxEvaluator {
     //   Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
     //   Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
     //   VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
-    const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
-    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
+    const WIDE_ANGLE_MULTIPLIER: f64 = 1.50;
+    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.55;
     const SLIDER_MULTIPLIER: f64 = 1.16;
-    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
+    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.75;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
     // Calibration scalar: brings the full evaluator output to
