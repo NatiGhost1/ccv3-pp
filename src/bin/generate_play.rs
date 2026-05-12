@@ -1,7 +1,7 @@
 use std::{env, fmt::Display, path::PathBuf, process::exit, time::SystemTime};
 
 use rosu_mods::GameModsLegacy;
-use rosu_pp::{Beatmap, Difficulty, GameMods, Performance};
+use ccv3_pp::{Beatmap, Difficulty, GameMods, Performance};
 
 const DEFAULT_PLAYS: usize = 5;
 

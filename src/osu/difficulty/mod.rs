@@ -29,7 +29,7 @@ use super::attributes::OsuDifficultyAttributes;
 
 pub mod evaluators;
 pub mod gradual;
-mod object;
+pub mod object;
 pub mod rating;
 pub mod scaling_factor;
 pub mod skills;
@@ -192,11 +192,11 @@ impl DifficultyValues {
             .collect();
 
         // Object strains from the speed skill (for tap_bpm top-10% filtering)
-        let object_strains: Vec<f64> = skills.speed.get_object_strains();
+        let object_strains: Vec<f64> = skills.speed.object_strains().to_vec();
 
         // Strain peaks for local_sr_per_minute (marathon decay)
-        let aim_peaks: Vec<f64> = skills.aim.cloned_strain_peaks();
-        let speed_peaks: Vec<f64> = skills.speed.cloned_strain_peaks();
+        let aim_peaks: Vec<f64> = skills.aim.clone().into_current_strain_peaks();
+        let speed_peaks: Vec<f64> = skills.speed.clone().into_current_strain_peaks();
 
         // Compute dominant_tap_bpm
         if !object_strains.is_empty() && !speed_object_data.is_empty() {
@@ -205,11 +205,10 @@ impl DifficultyValues {
         }
 
         // Compute speed rework multipliers
-        let sr_params = speed_precal::SpeedReworkParams::default();
-        attrs.speed_rework_mult_vanilla =
-            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, false);
-        attrs.speed_rework_mult_autopilot =
-            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, true);
+        let (vanilla_mult, autopilot_mult) =
+            speed_precal::precompute_speed_rework_from_owned(&speed_object_data, attrs.dominant_tap_bpm);
+        attrs.speed_rework_mult_vanilla = vanilla_mult;
+        attrs.speed_rework_mult_autopilot = autopilot_mult;
 
         // Compute local_sr_per_minute for marathon decay
         attrs.local_sr_per_minute = crate::osu::performance::relax_marathon::local_sr_per_minute(

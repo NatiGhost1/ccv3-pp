@@ -36,9 +36,7 @@ pub fn decay_divisor(r: u32, average_bpm: f64, p: AutopilotDecayParams) -> f64 {
     let bpm_factor = base_bpm_factor * streak_factor;
 
     let base = 1.0 + p.b * (r as f64).powf(p.q) * bpm_factor;
-    if r >= p.double_at {
-        1.0 * base // AP has a more agressive decay curve, so the double_at multiplier is removed.
-    } 
+    base
 }
 
 const DIFFICULTY_MULTIPLIER: f64 = 0.0675;
@@ -102,7 +100,7 @@ pub fn compute_local_bpm_per_minute(
     diff_objects: &[crate::osu::difficulty::object::OsuDifficultyObject],
     delta_times: &[f64],
 ) -> Vec<f64> {
-    let total_time = diff_objects.last().map(|obj| obj.base.time as f64).unwrap_or(0.0);
+    let total_time = diff_objects.last().map(|obj| obj.base.start_time as f64).unwrap_or(0.0);
     let n_minutes = ((total_time / MINUTE_MS).ceil() as usize).max(1);
 
     let mut out = Vec::with_capacity(n_minutes);
@@ -113,7 +111,7 @@ pub fn compute_local_bpm_per_minute(
         let mut count = 0;
 
         for (i, obj) in diff_objects.iter().enumerate() {
-            let t = obj.base.time as f64;
+            let t = obj.base.start_time as f64;
             if t >= start_time && t < end_time {
                 sum_delta += delta_times[i];
                 count += 1;

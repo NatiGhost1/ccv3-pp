@@ -122,15 +122,15 @@ impl OsuPerformanceCalculator<'_> {
         let mut aim_estimated_slider_breaks = 0.0;
         let mut speed_estimated_slider_breaks = 0.0;
 
-        let aim_value =
+        let mut aim_value =
             self.compute_aim_value(effective_miss_count, &mut aim_estimated_slider_breaks);
-        let speed_value = self.compute_speed_value(
+        let mut speed_value = self.compute_speed_value(
             speed_deviation,
             effective_miss_count,
             &mut speed_estimated_slider_breaks,
         );
-        let acc_value = self.compute_accuracy_value();
-        let flashlight_value = self.compute_flashlight_value(effective_miss_count);
+        let mut acc_value = self.compute_accuracy_value();
+        let mut flashlight_value = self.compute_flashlight_value(effective_miss_count);
 
         let mut pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
@@ -171,7 +171,7 @@ impl OsuPerformanceCalculator<'_> {
             let mult = super::relax_marathon::relax_marathon_multiplier(
                 &self.attrs.local_sr_per_minute,
                 &self.attrs.local_bpm_per_minute,
-                &params,
+                params,
             );
             aim_value *= mult;
             flashlight_value *= mult;
