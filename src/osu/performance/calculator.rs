@@ -992,13 +992,7 @@ impl OsuPerformanceCalculator<'_> {
         //              × clamp(combo/2000, 0, 1)
         // ═════════════════════════════════════════════════════════════
 
-        // Base p adjusted by mods (same as before)
         let mut p: f64 = 0.998;
-
-        if self.mods.dt() && self.mods.hr() { p += 0.0025; }
-        if self.mods.dt() && self.mods.ez() { p += 0.0028; }
-        if map_max_combo <= 500 && self.mods.dt() { p -= 0.02; }
-        if map_max_combo <= 500 && self.mods.dt() && self.mods.hr() { p -= 0.01; }
 
         // Continuous exponent: smooth exponential rise from 1.5 to ~2.4
         let base_exp = 1.5 + 0.9 * (1.0 - (-misses / 8.0).exp());
