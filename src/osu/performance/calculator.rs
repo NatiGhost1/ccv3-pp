@@ -120,7 +120,7 @@ impl OsuPerformanceCalculator<'_> {
                 f64::from(self.state.hitresults.misses)   
             } else {
                 effective_miss_count
-            }
+            };
 
         let speed_deviation = self.calculate_speed_deviation();
 
