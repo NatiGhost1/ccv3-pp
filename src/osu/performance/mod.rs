@@ -27,13 +27,13 @@ use super::{
 };
 
 mod calculator;
-pub mod rx_miss;
-pub mod ap_miss;
+// pub mod rx_miss; //
+// pub mod ap_miss; //
 pub mod relax_marathon;
 pub mod speed_rework;
 pub mod gradual;
 pub mod auto_marathon;
-pub mod nofail;
+// pub mod nofail; //
 mod hitresult_generator;
 mod inspect;
 
