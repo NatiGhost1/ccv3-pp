@@ -527,7 +527,7 @@ impl AimRxEvaluator {
             let max_d = curr_d.max(prev_d);
             let min_d = curr_d.min(prev_d);
 
-            if max_d > 150.0 {
+            if max_d > 80.0 {
                 let change_ratio = if max_d > 0.0 {
                     (max_d - min_d) / max_d
                 } else {
@@ -538,7 +538,7 @@ impl AimRxEvaluator {
 
                 if !is_edge_to_edge && change_ratio < Self::CONSTANT_DIST_RATIO {
                     let dist_factor = 1.0
-                        - ((max_d - 150.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 150.0))
+                        - ((max_d - 80.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 80.0))
                             .clamp(0.0, 1.0);
                     let severity = (1.0 - (change_ratio / Self::CONSTANT_DIST_RATIO)) * dist_factor;
                     cross_screen_nerf = 0.15 * severity;
