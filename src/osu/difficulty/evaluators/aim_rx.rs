@@ -586,22 +586,6 @@ impl AimRxEvaluator {
             }
         }
 
-        let mut tech_boost = 0.0;
-        if !flow_active && !skip_farm_detection {
-            let (_, angle_stddev, angle_n) =
-                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-            let (vel_mean, vel_stddev, vel_n) =
-                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-            if angle_n >= 4 && vel_n >= 4 {
-                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
-                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
-                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
-                let tech_signal = angle_variety * vel_variety;
-                tech_boost = Self::TECH_MAX_BOOST * tech_signal;
-            }
-        }
-
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
 
