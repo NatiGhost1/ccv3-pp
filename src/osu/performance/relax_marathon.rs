@@ -178,6 +178,14 @@ pub fn relax_marathon_multiplier(
 
         let mut lambda = 1.0 / decay_divisor(r, params);
 
+        // High-BPM 1/2 sections like 410 BPM are hard on relax even if they
+        // look marathon-like. So soften the relax marathon nerf as BPM climbs.
+        let bpm = local_bpm[k];
+        if bpm >= 400.0 {
+            let soften = ((bpm - 400.0) / 40.0).clamp(0.0, 1.0) * 0.15;
+            lambda += (1.0 - lambda) * soften;
+        }
+
         // Weight by SR so "dead minutes" don't dominate.
         weighted += sr * lambda;
         total += sr;

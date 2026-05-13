@@ -116,6 +116,11 @@ impl OsuPerformanceCalculator<'_> {
                 + f64::from(self.state.hitresults.n50) * n50_mult)
                 .min(total_hits);
         }
+            let penalty_miss_count = if self.mods.rx() {
+                f64::from(self.state.hitresults.misses)   
+            } else {
+                effective_miss_count
+            }
 
         let speed_deviation = self.calculate_speed_deviation();
 
@@ -123,14 +128,14 @@ impl OsuPerformanceCalculator<'_> {
         let mut speed_estimated_slider_breaks = 0.0;
 
         let mut aim_value =
-            self.compute_aim_value(effective_miss_count, &mut aim_estimated_slider_breaks);
+            self.compute_aim_value(penalty_miss_count, &mut aim_estimated_slider_breaks);
         let mut speed_value = self.compute_speed_value(
             speed_deviation,
-            effective_miss_count,
+            penalty_miss_count,
             &mut speed_estimated_slider_breaks,
         );
         let mut acc_value = self.compute_accuracy_value();
-        let mut flashlight_value = self.compute_flashlight_value(effective_miss_count);
+        let mut flashlight_value = self.compute_flashlight_value(penalty_miss_count);
 
         let mut pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
@@ -497,9 +502,6 @@ impl OsuPerformanceCalculator<'_> {
     }
 
     fn compute_accuracy_value(&self) -> f64 {
-        if self.mods.rx() {
-            return 0.0;
-        }
 
         // * This percentage only considers HitCircles of any value - in this part
         // * of the calculation we focus on hitting the timing hit window.
@@ -552,6 +554,10 @@ impl OsuPerformanceCalculator<'_> {
 
         if self.mods.fl() {
             acc_value *= 1.02;
+        }
+
+        if self.mods.rx() {
+            acc_value *= 0.35
         }
 
         acc_value

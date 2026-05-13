@@ -546,6 +546,47 @@ impl AimRxEvaluator {
             }
         }
 
+        // ── Extreme flow aim nerf (distance-gated) ──────────────────
+        if is_flow_candidate {
+            let (flow_mean, flow_stddev, flow_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if flow_n >= 4 {
+                let mean_ok = flow_mean >= Self::FLOW_MEAN_ANGLE_THRESHOLD;
+                let stddev_ok = flow_stddev <= Self::FLOW_STDDEV_THRESHOLD;
+
+                if mean_ok && stddev_ok {
+                    let stddev_severity =
+                        (1.0 - (flow_stddev / Self::FLOW_STDDEV_THRESHOLD)).powi(2);
+                    let mean_range = PI - Self::FLOW_MEAN_ANGLE_THRESHOLD;
+                    let mean_severity = ((flow_mean - Self::FLOW_MEAN_ANGLE_THRESHOLD)
+                        / mean_range)
+                        .clamp(0.0, 1.0);
+                    let angle_severity = stddev_severity * mean_severity;
+
+                    let (avg_dist, _, dist_n) =
+                        windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+                    let dist_factor = if dist_n < 3 {
+                        0.5
+                    } else if avg_dist <= Self::FLOW_DIST_FULL_NERF {
+                        1.0
+                    } else if avg_dist >= Self::FLOW_DIST_EXEMPT {
+                        0.0
+                    } else {
+                        1.0 - ((avg_dist - Self::FLOW_DIST_FULL_NERF)
+                            / (Self::FLOW_DIST_EXEMPT - Self::FLOW_DIST_FULL_NERF))
+                    };
+
+                    let combined = angle_severity * dist_factor;
+                    flow_nerf = Self::FLOW_MAX_NERF * combined;
+                    if flow_nerf > 0.0 {
+                        flow_active = true;
+                    }
+                }
+            }
+        }
+
         let mut tech_boost = 0.0;
         if !flow_active && !skip_farm_detection {
             let (_, angle_stddev, angle_n) =
