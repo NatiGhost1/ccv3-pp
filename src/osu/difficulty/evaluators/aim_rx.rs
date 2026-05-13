@@ -331,9 +331,6 @@ impl AimRxEvaluator {
             wide_angle_bonus = Self::calc_wide_angle_bonus(curr_angle);
 
             // ── Windowed variance repetition ────────────────────────
-            let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
-            let high_bpm_t = ((eff_bpm - 410.0) / 90.0).clamp(0.0, 1.0);
-
             let (_win_mean, win_stddev, win_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
@@ -342,14 +339,18 @@ impl AimRxEvaluator {
             } else {
                 1.0
             };
+
             let rep_strength = 1.0 - variance_factor;
 
-            let wide_penalty = rep_strength * (1.0 - high_bpm_t);
-            let wide_rep_buff = high_bpm_t * 0.15;
-            wide_angle_bonus *=
-                angle_bonus * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER))
-                * (1.0 - wide_penalty + wide_rep_buff).max(0.0);
+            // Overall nerf for repetitive wide angles (no BPM scaling)
+            let wide_rep_nerf = rep_strength * 0.25; // adjust coefficient as needed (0.20~0.35 feels reasonable)
 
+            // Apply nerf
+            wide_angle_bonus *= 
+                angle_bonus 
+                * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER))
+                * (1.0 - wide_rep_nerf).max(0.0);
+            
             wiggle_bonus = angle_bonus
                 * smootherstep(
                     osu_curr_obj.lazy_jump_dist,
@@ -583,6 +584,22 @@ impl AimRxEvaluator {
                         flow_active = true;
                     }
                 }
+            }
+        }
+
+        let mut tech_boost = 0.0;
+        if !flow_active && !skip_farm_detection {
+            let (_, angle_stddev, angle_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (vel_mean, vel_stddev, vel_n) =
+                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if angle_n >= 4 && vel_n >= 4 {
+                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
+                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
+                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
+                let tech_signal = angle_variety * vel_variety;
+                tech_boost = Self::TECH_MAX_BOOST * tech_signal;
             }
         }
 
