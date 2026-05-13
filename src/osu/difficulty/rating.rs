@@ -49,7 +49,7 @@ impl OsuRatingCalculator<'_> {
         }
 
         if self.mods.rx() {
-            aim_rating = 1.0; // aim_rx.rs handles aim for relax specifically no aim rating nerf
+            aim_rating *= 1.0; // aim_rx.rs handles aim for relax specifically no aim rating nerf
         }
 
         if self.mods.nf() {
@@ -109,7 +109,7 @@ impl OsuRatingCalculator<'_> {
         let mut speed_rating = Self::calculate_difficulty_rating(speed_difficulty_value);
 
         if self.mods.ap() {
-            speed_rating *= 0.87; // 0.5 speed rating is way too fucking harsh (pp devs were on crack)
+            speed_rating *= 0.85; 
         }
 
         if self.mods.nf() {

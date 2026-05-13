@@ -196,7 +196,7 @@ impl AimRxEvaluator {
     // akat-equivalent magnitude. Applied at the very end.
     // Accounts for the cumulative difference in angle bonus shapes
     // (smoothstep is broader than sin²) plus SKILL_MULTIPLIER gap.
-    const AKAT_CALIBRATION: f64 = 0.92;
+    const AKAT_CALIBRATION: f64 = 0.92; // 0.968 (SKILL_MULTIPLIER) × ~0.95 (angle shape) = 0.92
 
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
@@ -453,8 +453,8 @@ impl AimRxEvaluator {
         let is_flow_candidate = eff_bpm > Self::FLOW_MIN_EFF_BPM && no_followpoint_streak >= 6;
         let skip_farm_detection = no_followpoint_streak < 6;
 
-        let mut nx_nerf = 0.0;
-        let mut slop_nerf = 0.0;
+        let nx_nerf = 0.0;
+        let slop_nerf = 0.0;
         let mut cross_screen_nerf = 0.0;
         let mut flow_nerf = 0.0;
         let mut flow_active = false;

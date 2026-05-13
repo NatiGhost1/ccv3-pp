@@ -1026,7 +1026,7 @@ impl OsuPerformanceCalculator<'_> {
         result.min(1.0)
     }
 }
-// * All of mod specific accuracy and miss systems are implemented here now to avoid errors and inconsistencies with the main calculation * //
+// * All of mod specific accuracy and miss systems are implemented here now to avoid errors and inconsistencies with the main calculation. This also makes it easier to adjust and test them since they're all in one place. * //
 
 // ── RX Miss ─────────────────────────────────────
 #[allow(clippy::too_many_arguments)]
@@ -1217,7 +1217,11 @@ fn percentile_ranks(values: &[f64]) -> Vec<f64> {
         return vec![0.5; n];
     }
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| values[a].partial_cmp(&values[b]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        values[a]
+            .partial_cmp(&values[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut ranks = vec![0.0f64; n];
     for (rank, &idx) in indices.iter().enumerate() {
         ranks[idx] = rank as f64 / (n - 1) as f64;
@@ -1313,7 +1317,11 @@ fn ap_miss_multiplier(
     let bpm_variability_relief = if chunk_avg_delta.len() >= 4 {
         let mean_d: f64 = chunk_avg_delta.iter().sum::<f64>() / chunk_avg_delta.len() as f64;
         if mean_d > 0.0 {
-            let variance: f64 = chunk_avg_delta.iter().map(|d| (d - mean_d).powi(2)).sum::<f64>() / chunk_avg_delta.len() as f64;
+            let variance: f64 = chunk_avg_delta
+                .iter()
+                .map(|d| (d - mean_d).powi(2))
+                .sum::<f64>()
+                / chunk_avg_delta.len() as f64;
             let cv = variance.sqrt() / mean_d;
             if cv > 0.15 {
                 ((cv - 0.15) / 0.30).clamp(0.0, 1.0) * 0.05
