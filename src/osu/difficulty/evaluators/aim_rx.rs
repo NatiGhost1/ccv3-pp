@@ -186,10 +186,10 @@ impl AimRxEvaluator {
     //   Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
     //   Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
     //   VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
-    const WIDE_ANGLE_MULTIPLIER: f64 = 1.50;
-    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.55;
+    const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
+    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
     const SLIDER_MULTIPLIER: f64 = 1.16;
-    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.75;
+    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
     // Calibration scalar: brings the full evaluator output to
@@ -200,36 +200,54 @@ impl AimRxEvaluator {
 
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
+    const FOLLOW_POINT_DISTANCE: f64 = 112.0;
+    const FARM_MAX_NERF: f64 = 0.35;
     const CONSTANT_DIST_RATIO: f64 = 0.18;
     const EDGE_TO_EDGE_THRESHOLD: f64 = 400.0;
     const CONSTANT_DIST_BPM_STRAIN_TIME: f64 = 85.7;
 
+    const FLOW_MIN_EFF_BPM: f64 = 210.25;
     const FLOW_MEAN_ANGLE_THRESHOLD: f64 = 2.0;
     const FLOW_STDDEV_THRESHOLD: f64 = 0.3;
     const FLOW_MAX_NERF: f64 = 0.50;
-    const FLOW_BPM_STRAIN_TIME: f64 = 36.58;
     const FLOW_DIST_FULL_NERF: f64 = 50.0;
     const FLOW_DIST_EXEMPT: f64 = 97.0;
 
-    // N/X pattern nerf: max cut when a strong alternating pattern is
-    // detected at low BPM. Fades at high BPM (genuinely hard to hold).
+    // N/X / farm detection combined into a single system.
     const NX_MAX_NERF: f64 = 0.30;
 
     // Aim slop: max nerf for constant-everything patterns.
     const SLOP_MAX_NERF: f64 = 0.35;
-    const STACK_NERF_DECAY_PER_EXTRA: f64 = 0.12;
-    const STACK_NERF_DECAY_MIN: f64 = 0.70;
 
     // Tech boost: max bonus for high-variance patterns.
     const TECH_MAX_BOOST: f64 = 0.08;
 
-    fn nerf_stack_decay(active_nerf_count: usize) -> f64 {
-        if active_nerf_count <= 1 {
-            1.0
-        } else {
-            (1.0 - Self::STACK_NERF_DECAY_PER_EXTRA * (active_nerf_count - 1) as f64)
-                .max(Self::STACK_NERF_DECAY_MIN)
+    fn recent_no_followpoint_streak<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+        window: usize,
+    ) -> usize {
+        let mut streak = 0;
+        let mut current = Some(curr);
+
+        while streak < window {
+            if let Some(obj) = current {
+                if obj.lazy_jump_dist <= Self::FOLLOW_POINT_DISTANCE {
+                    streak += 1;
+                    current = obj.previous(0, diff_objects);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
+
+        streak
+    }
+
+    fn combine_farm_severity(nx_strength: f64, slop_severity: f64, cross_severity: f64) -> f64 {
+        1.0 - (1.0 - nx_strength) * (1.0 - slop_severity) * (1.0 - cross_severity)
     }
 
     pub fn evaluate_diff_of<'a>(
@@ -430,22 +448,26 @@ impl AimRxEvaluator {
         // ═════════════════════════════════════════════════════════════
 
         let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
-        let mut active_nerf_count = 0;
+        let no_followpoint_streak =
+            Self::recent_no_followpoint_streak(osu_curr_obj, diff_objects, 6);
+        let is_flow_candidate = eff_bpm > Self::FLOW_MIN_EFF_BPM && no_followpoint_streak >= 6;
+        let skip_farm_detection = no_followpoint_streak < 6;
+
         let mut nx_nerf = 0.0;
         let mut slop_nerf = 0.0;
         let mut cross_screen_nerf = 0.0;
         let mut flow_nerf = 0.0;
+        let mut flow_active = false;
 
-        // ── N/X alternating pattern nerf ─────────────────────────────
+        // ── N/X alternating pattern severity ─────────────────────────────
         // N patterns (zigzag) and X patterns (crossover) are trivial on
         // RX because the cursor just bounces between two positions.
         // Detection: check if consecutive angles alternate between two
         // tight clusters. Nerf fades at high BPM (genuinely hard).
-        {
+        let nx_severity = if !skip_farm_detection {
             let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
             if nx_strength > 0.05 {
-                // Also check distance consistency — true N/X has constant spacing
                 let (dist_mean, dist_stddev, dist_n) =
                     windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
@@ -455,26 +477,23 @@ impl AimRxEvaluator {
                     1.0
                 };
 
-                // Constant distance (low CV) amplifies the nerf
                 let dist_consistency = (1.0 - (dist_cv / 0.20).clamp(0.0, 1.0)).max(0.0);
-
-                // BPM fade: full nerf below 350, fades to 0 at 500+
                 let bpm_fade = 1.0 - ((eff_bpm - 350.0) / 150.0).clamp(0.0, 1.0);
 
-                let nx_severity = nx_strength * dist_consistency * bpm_fade;
-                nx_nerf = Self::NX_MAX_NERF * nx_severity;
-                if nx_nerf > 0.0 {
-                    active_nerf_count += 1;
-                }
+                nx_strength * dist_consistency * bpm_fade
+            } else {
+                0.0
             }
-        }
+        } else {
+            0.0
+        };
 
         // ── Aim slop detection ──────────────────────────────────────
         // Constant velocity + constant distance + low angle variance
         // = mechanical slop. The cursor follows a predictable path.
         // This catches patterns that N/X detection misses (e.g. linear
         // back-and-forth, square patterns, constant-speed circles).
-        {
+        let slop_severity = if !skip_farm_detection {
             let (_, angle_stddev, angle_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
             let (dist_mean, dist_stddev, dist_n) =
@@ -483,62 +502,31 @@ impl AimRxEvaluator {
                 windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
             if angle_n >= 4 && dist_n >= 4 && vel_n >= 4 {
-                // Angle uniformity: stddev < 0.3 = highly uniform
                 let angle_uniformity = (1.0 - (angle_stddev / 0.3).clamp(0.0, 1.0)).max(0.0);
-
-                // Distance uniformity: CV < 0.15 = very constant spacing
                 let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 1.0 };
                 let dist_uniformity = (1.0 - (dist_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
-
-                // Velocity uniformity: CV < 0.15 = constant speed
                 let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 1.0 };
                 let vel_uniformity = (1.0 - (vel_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
 
-                // All three must be uniform for the nerf to fire
                 let slop_severity = angle_uniformity * dist_uniformity * vel_uniformity;
-
-                // BPM fade: less severe at high BPM
                 let bpm_fade = 1.0 - ((eff_bpm - 400.0) / 150.0).clamp(0.0, 1.0);
 
-                slop_nerf = Self::SLOP_MAX_NERF * slop_severity * bpm_fade;
-                if slop_nerf > 0.0 {
-                    active_nerf_count += 1;
-                }
+                slop_severity * bpm_fade
+            } else {
+                0.0
             }
-        }
-
-        // ── Tech pattern boost ──────────────────────────────────────
-        // High angle variance + high velocity change = genuine tech.
-        // These patterns are hard on RX because the cursor must react
-        // to unpredictable movements. Small boost to offset the global
-        // nerfs that might accidentally clip tech sections.
-        {
-            let (_, angle_stddev, angle_n) =
-                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-            let (vel_mean, vel_stddev, vel_n) =
-                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-            if angle_n >= 4 && vel_n >= 4 {
-                // High angle variance: stddev > 0.6 = varied
-                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
-
-                // High velocity variance: CV > 0.25 = real speed changes
-                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
-                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
-
-                let tech_signal = angle_variety * vel_variety;
-                aim_strain *= 1.0 + Self::TECH_MAX_BOOST * tech_signal;
-            }
-        }
+        } else {
+            0.0
+        };
 
         // ── Cross-screen constant-distance nerf ─────────────────────
-        if osu_curr_obj.adjusted_delta_time >= Self::CONSTANT_DIST_BPM_STRAIN_TIME {
+        if !flow_active && !skip_farm_detection && osu_curr_obj.adjusted_delta_time >= Self::CONSTANT_DIST_BPM_STRAIN_TIME {
             let curr_d = osu_curr_obj.lazy_jump_dist;
             let prev_d = osu_last_obj.lazy_jump_dist;
             let max_d = curr_d.max(prev_d);
             let min_d = curr_d.min(prev_d);
 
-            if max_d > 80.0 {
+            if max_d > 150.0 {
                 let change_ratio = if max_d > 0.0 {
                     (max_d - min_d) / max_d
                 } else {
@@ -548,21 +536,17 @@ impl AimRxEvaluator {
                 let is_edge_to_edge = max_d >= Self::EDGE_TO_EDGE_THRESHOLD;
 
                 if !is_edge_to_edge && change_ratio < Self::CONSTANT_DIST_RATIO {
-                    let ratio_factor = 1.0 - (change_ratio / Self::CONSTANT_DIST_RATIO);
                     let dist_factor = 1.0
-                        - ((max_d - 80.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 80.0))
+                        - ((max_d - 150.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 150.0))
                             .clamp(0.0, 1.0);
-                    let severity = ratio_factor * dist_factor;
+                    let severity = (1.0 - (change_ratio / Self::CONSTANT_DIST_RATIO)) * dist_factor;
                     cross_screen_nerf = 0.15 * severity;
-                    if cross_screen_nerf > 0.0 {
-                        active_nerf_count += 1;
-                    }
                 }
             }
         }
 
         // ── Extreme flow aim nerf (distance-gated) ──────────────────
-        if osu_curr_obj.adjusted_delta_time >= Self::FLOW_BPM_STRAIN_TIME {
+        if is_flow_candidate {
             let (flow_mean, flow_stddev, flow_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
@@ -596,24 +580,36 @@ impl AimRxEvaluator {
                     let combined = angle_severity * dist_factor;
                     flow_nerf = Self::FLOW_MAX_NERF * combined;
                     if flow_nerf > 0.0 {
-                        active_nerf_count += 1;
+                        flow_active = true;
                     }
                 }
             }
         }
 
-        let nerf_stack_decay = Self::nerf_stack_decay(active_nerf_count);
-        if nx_nerf > 0.0 {
-            aim_strain *= 1.0 - nx_nerf * nerf_stack_decay;
+        let mut tech_boost = 0.0;
+        if !flow_active && !skip_farm_detection {
+            let (_, angle_stddev, angle_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (vel_mean, vel_stddev, vel_n) =
+                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if angle_n >= 4 && vel_n >= 4 {
+                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
+                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
+                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
+                let tech_signal = angle_variety * vel_variety;
+                tech_boost = Self::TECH_MAX_BOOST * tech_signal;
+            }
         }
-        if slop_nerf > 0.0 {
-            aim_strain *= 1.0 - slop_nerf * nerf_stack_decay;
-        }
-        if cross_screen_nerf > 0.0 {
-            aim_strain *= 1.0 - cross_screen_nerf * nerf_stack_decay;
-        }
-        if flow_nerf > 0.0 {
-            aim_strain *= 1.0 - flow_nerf * nerf_stack_decay;
+
+        let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
+        let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
+
+        if flow_active {
+            aim_strain *= 1.0 - flow_nerf;
+        } else {
+            aim_strain *= 1.0 - farm_nerf;
+            aim_strain *= 1.0 + tech_boost;
         }
 
         // ── Akat calibration ────────────────────────────────────────

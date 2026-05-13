@@ -44,6 +44,8 @@ pub fn decay_divisor(r: u32, average_bpm: f64, p: AutopilotDecayParams) -> f64 {
 const DIFFICULTY_MULTIPLIER: f64 = 0.0675;
 const PEAK_SECTION_LEN_MS: f64 = 400.0;
 const MINUTE_MS: f64 = 60_000.0;
+const SUBSECTION_MS: f64 = 15_000.0;
+const SUBSECTIONS_PER_MINUTE: usize = 4;
 
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
@@ -98,6 +100,33 @@ fn star_from_peaks(peaks: &[f64]) -> f64 {
         * ((100_000.0 / 2.0_f64.powf(1.0 / 1.1) * perf).cbrt() + 4.0)
 }
 
+fn partition_sections(len: usize, parts: usize) -> Vec<(usize, usize)> {
+    if parts == 0 || len == 0 {
+        return Vec::new();
+    }
+
+    let base = len / parts;
+    let remainder = len % parts;
+    let mut sections = Vec::with_capacity(parts);
+    let mut offset = 0;
+
+    for part in 0..parts {
+        let size = base + usize::from(part < remainder);
+        sections.push((offset, offset + size));
+        offset += size;
+    }
+
+    sections
+}
+
+fn subsection_star_ratings(peaks: &[f64]) -> Vec<f64> {
+    let mut stars = Vec::with_capacity(SUBSECTIONS_PER_MINUTE);
+    for (start, end) in partition_sections(peaks.len(), SUBSECTIONS_PER_MINUTE) {
+        stars.push(star_from_peaks(&peaks[start..end]));
+    }
+    stars
+}
+
 pub fn compute_local_bpm_per_minute(
     diff_objects: &[crate::osu::difficulty::object::OsuDifficultyObject],
     delta_times: &[f64],
@@ -133,8 +162,6 @@ pub fn compute_local_bpm_per_minute(
 }
 
 pub fn local_sr_per_minute(strains_speed: &[f64]) -> Vec<f64> {
-    // Use speed strain peaks only, since AP is fundamentally a speed/rhythm
-    // problem and does not rely on aim performance.
     let peaks_per_min = (MINUTE_MS / PEAK_SECTION_LEN_MS).round() as usize; // 150
     let n_minutes = strains_speed.len().div_ceil(peaks_per_min);
 
@@ -143,15 +170,15 @@ pub fn local_sr_per_minute(strains_speed: &[f64]) -> Vec<f64> {
         let start = k * peaks_per_min;
         let end = ((k + 1) * peaks_per_min).min(strains_speed.len());
         let speed_slice = &strains_speed[start..end];
-        out.push(star_from_peaks(speed_slice));
+
+        let subsection_stars = subsection_star_ratings(speed_slice);
+        out.push(star_from_peaks(&subsection_stars));
     }
 
     out
 }
 
 pub fn local_aim_per_minute(strains_aim: &[f64]) -> Vec<f64> {
-    // Keep aim available only to classify low-BPM aim-heavy sections as
-    // non-marathon-like, without letting aim drive the decay itself.
     let peaks_per_min = (MINUTE_MS / PEAK_SECTION_LEN_MS).round() as usize; // 150
     let n_minutes = strains_aim.len().div_ceil(peaks_per_min);
 
@@ -160,7 +187,9 @@ pub fn local_aim_per_minute(strains_aim: &[f64]) -> Vec<f64> {
         let start = k * peaks_per_min;
         let end = ((k + 1) * peaks_per_min).min(strains_aim.len());
         let aim_slice = &strains_aim[start..end];
-        out.push(star_from_peaks(aim_slice));
+
+        let subsection_stars = subsection_star_ratings(aim_slice);
+        out.push(star_from_peaks(&subsection_stars));
     }
 
     out
@@ -182,7 +211,10 @@ pub fn autopilot_marathon_multiplier(
     let mut sum_bpm = 0.0;
     let mut count = 0;
 
-    let mut low_bpm_aim_streak = 0;
+    let mut low_bpm_aim_streak: usize = 0;
+    let mut balanced_streak: usize = 0;
+    let mut best_bonus: f64 = 1.0;
+    let mut previous_sr = local_sr[0];
 
     for (k, (&sr, &bpm)) in local_sr.iter().zip(local_bpm.iter()).enumerate() {
         if k > 0 && (bpm - local_bpm[k - 1]).abs() <= params.bpm_tau {
@@ -215,6 +247,21 @@ pub fn autopilot_marathon_multiplier(
             low_bpm_aim_streak = 0;
         }
 
+        let balanced = sr >= 3.0
+            && local_aim[k] >= 3.0
+            && (aim_ratio >= 0.7 && aim_ratio <= 1.3)
+            && (k == 0 || sr >= previous_sr * 0.75);
+
+        if balanced {
+            balanced_streak += 1;
+            let bonus = 1.0 + 0.01 * (balanced_streak.saturating_sub(2) as f64);
+            best_bonus = best_bonus.max(bonus.min(1.08));
+        } else {
+            balanced_streak = 0;
+        }
+
+        previous_sr = sr;
+
         // Weight by SR so "dead minutes" don't dominate.
         weighted += sr * lambda;
         total += sr;
@@ -226,9 +273,14 @@ pub fn autopilot_marathon_multiplier(
         1.0
     };
 
-    // Maps longer than 3 minutes always get a small fallback nerf.
-    if local_bpm.len() > 3 {
-        mult *= 0.98;
+    if best_bonus > 1.0 {
+        mult = 1.0 - (1.0 - mult) / best_bonus;
+    }
+
+    if local_bpm.len() > 2 {
+        let length_softener = ((local_bpm.len() as f64 - 2.0) / 8.0).clamp(0.0, 1.0);
+        let nerf_reduction = 0.10 * length_softener;
+        mult = 1.0 - (1.0 - mult) * (1.0 - nerf_reduction);
     }
 
     mult

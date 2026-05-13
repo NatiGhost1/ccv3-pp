@@ -23,16 +23,18 @@ impl Default for MarathonDecayParams {
 pub fn decay_divisor(r: u32, p: MarathonDecayParams) -> f64 {
     let rf = r as f64;
     let base = 1.0 + p.b * rf.powf(p.q);
-    if r >= p.double_at {
-        1.3 * base
-    } else {
-        base
-    } 
+    let smooth_factor = (rf / p.double_at.max(1) as f64).powf(0.65).clamp(0.0, 1.0);
+
+    // Avoid a hard jump at `double_at`; instead apply a smooth scaling for
+    // longer repeated sections.
+    base * (1.0 + 0.15 * smooth_factor)
 }
 
 const DIFFICULTY_MULTIPLIER: f64 = 0.0675;
 const PEAK_SECTION_LEN_MS: f64 = 400.0;
 const MINUTE_MS: f64 = 60_000.0;
+const SUBSECTION_MS: f64 = 15_000.0;
+const SUBSECTIONS_PER_MINUTE: usize = 4;
 
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
@@ -75,13 +77,13 @@ fn star_from_aim_speed(aim_peaks: &[f64], speed_peaks: &[f64]) -> f64 {
     let aim_dv = difficulty_value_from_peaks(aim_peaks);
     let speed_dv = difficulty_value_from_peaks(speed_peaks);
 
-// convert to "ratings"
-let aim_rating = aim_dv.sqrt() * DIFFICULTY_MULTIPLIER;
-let speed_rating = speed_dv.sqrt() * DIFFICULTY_MULTIPLIER;
+    // convert to "ratings"
+    let aim_rating = aim_dv.sqrt() * DIFFICULTY_MULTIPLIER;
+    let speed_rating = speed_dv.sqrt() * DIFFICULTY_MULTIPLIER;
 
-// convert to "performance"
-let base_aim_perf = strain::difficulty_to_performance(aim_rating);
-let base_speed_perf = strain::difficulty_to_performance(speed_rating);
+    // convert to "performance"
+    let base_aim_perf = strain::difficulty_to_performance(aim_rating);
+    let base_speed_perf = strain::difficulty_to_performance(speed_rating);
 
     // flashlight ignored for nomod SR (consistent with difficulty eval)
     let base_perf = (base_aim_perf.powf(1.1) + base_speed_perf.powf(1.1)).powf(1.0 / 1.1);
@@ -96,6 +98,47 @@ let base_speed_perf = strain::difficulty_to_performance(speed_rating);
         * ((100_000.0 / 2.0_f64.powf(1.0 / 1.1) *base_perf).cbrt() + 4.0)
 }
 
+fn partition_sections(len: usize, parts: usize) -> Vec<(usize, usize)> {
+    if parts == 0 || len == 0 {
+        return Vec::new();
+    }
+
+    let base = len / parts;
+    let remainder = len % parts;
+    let mut sections = Vec::with_capacity(parts);
+    let mut offset = 0;
+
+    for part in 0..parts {
+        let size = base + usize::from(part < remainder);
+        sections.push((offset, offset + size));
+        offset += size;
+    }
+
+    sections
+}
+
+fn subsection_star_ratings(aim_peaks: &[f64], speed_peaks: &[f64]) -> Vec<f64> {
+    let mut stars = Vec::with_capacity(SUBSECTIONS_PER_MINUTE);
+    for (start, end) in partition_sections(aim_peaks.len(), SUBSECTIONS_PER_MINUTE) {
+        stars.push(star_from_aim_speed(&aim_peaks[start..end], &speed_peaks[start..end]));
+    }
+    stars
+}
+
+fn star_from_peaks(peaks: &[f64]) -> f64 {
+    let value = difficulty_value_from_peaks(peaks);
+    let rating = value.sqrt() * DIFFICULTY_MULTIPLIER;
+    let perf = strain::difficulty_to_performance(rating);
+
+    if perf <= 0.00001 {
+        return 0.0;
+    }
+
+    PERFORMANCE_BASE_MULTIPLIER.cbrt()
+        * 0.027
+        * ((100_000.0 / 2.0_f64.powf(1.0 / 1.1) * perf).cbrt() + 4.0)
+}
+
 pub fn local_sr_per_minute(strains_aim: &[f64], strains_speed: &[f64]) -> Vec<f64> {
     let peaks_per_min = (MINUTE_MS / PEAK_SECTION_LEN_MS).round() as usize; // 150
     let n_minutes = strains_aim.len().div_ceil(peaks_per_min);
@@ -106,7 +149,8 @@ pub fn local_sr_per_minute(strains_aim: &[f64], strains_speed: &[f64]) -> Vec<f6
         let aim_slice = &strains_aim[start..end];
         let speed_slice = &strains_speed[start..end];
 
-        out.push(star_from_aim_speed(aim_slice, speed_slice));
+        let subsection_stars = subsection_star_ratings(aim_slice, speed_slice);
+        out.push(star_from_peaks(&subsection_stars));
     }
 
     out
