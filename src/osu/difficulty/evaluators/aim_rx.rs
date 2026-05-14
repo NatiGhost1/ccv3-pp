@@ -1,16 +1,28 @@
-// CC V3: Relax-specific aim evaluator for rosu-pp (v3).
+// CC V3: Relax-specific aim evaluator for rosu-pp.
 //
-// Enhancements over v2:
-//   * N/X pattern detection — alternating zigzag and crossover patterns
-//     that are trivial on RX are detected via angle pair analysis and
-//     distance consistency, with dedicated nerfs.
-//   * Aim slop detection — constant velocity + constant distance +
-//     constant angle windows = mechanical slop, progressively nerfed.
-//   * Tech pattern boost — high angle variance + high velocity change
-//     ratio = genuine tech, rewarded with reduced nerf or small buff.
-//   * Akat calibration — output is scaled down by AKAT_CALIBRATION so
-//     the final pp approximately matches ccv3-pp-rs output despite
-//     rosu's higher SKILL_MULTIPLIER and wider angle bonus shapes.
+// Purpose:
+//   * N/X pattern detection — detects alternating zigzag and crossover patterns
+//     that are trivial on RX via angle pair analysis and distance consistency.
+//   * Aim slop detection — identifies constant velocity + constant distance +
+//     low angle variance windows (mechanical patterns) for progressive nerfing.
+//   * Tech pattern boost — rewards high angle variance + high velocity change
+//     ratio as genuine technical aim.
+//   * Neutral flow protection — prevents accidental tech buffs on common flow
+//     patterns that stay inside typical distance bands (112-90, 90-70, etc.).
+//   * Delayed tech buff — avoids immediate tech application right after farm
+//     sections to prevent disproportionate strain from isolated anomalies.
+//   * Tech boost overall cap — limits maximum positive adjustment.
+//   * Akat calibration — scales output to approximately match ccv3-pp-rs
+//     despite rosu's higher SKILL_MULTIPLIER and wider angle bonus shapes.
+//
+// Akat calibration details:
+//   Derivation: akat_rx / akat_vanilla × rosu_vanilla × (25.18/26.0)
+//     Wide:  1.56/1.45 × 1.5 × 0.968 = 1.56
+//     Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
+//     Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
+//     VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
+//   Final AKAT_CALIBRATION (0.92) accounts for cumulative angle shape
+//   differences (smoothstep broader than sin²) + SKILL_MULTIPLIER gap.
 //
 // Uses rosu's formula base (smoothstep/smootherstep, adjusted_delta_time,
 // wiggle_bonus, small_circle_bonus, DIAMETER-based gating).
@@ -141,8 +153,6 @@ fn detect_nx_pattern<'a>(
         return 0.0;
     }
 
-    // Check alternation: angles should alternate between two clusters.
-    // even[i] ≈ even[j], odd[i] ≈ odd[j], but even ≠ odd.
     let evens: Vec<f64> = angles.iter().step_by(2).copied().collect();
     let odds: Vec<f64> = angles.iter().skip(1).step_by(2).copied().collect();
 
@@ -159,13 +169,10 @@ fn detect_nx_pattern<'a>(
     let even_stddev = even_var.sqrt();
     let odd_stddev = odd_var.sqrt();
 
-    // Both clusters must be tight (stddev < 0.25 rad each)
-    // AND the two clusters must be different (|mean_diff| > 0.3 rad)
     let cluster_tight = even_stddev < 0.25 && odd_stddev < 0.25;
     let clusters_differ = (even_mean - odd_mean).abs() > 0.3;
 
     if cluster_tight && clusters_differ {
-        // Strength: how tight × how different
         let tightness = 1.0 - ((even_stddev + odd_stddev) / 0.50).clamp(0.0, 1.0);
         let separation = ((even_mean - odd_mean).abs() / PI).clamp(0.0, 1.0);
         tightness * separation
@@ -176,34 +183,20 @@ fn detect_nx_pattern<'a>(
 
 impl AimRxEvaluator {
     // Recalibrated constants to produce akat-equivalent pp output.
-    // rosu SKILL_MULTIPLIER is 26.0 vs akat's 25.18 (+3.3%), and
-    // rosu's angle shapes (smoothstep) produce wider bonuses than
-    // akat's sin². These constants compensate so the final strain
-    // output roughly matches what akat-pp would produce.
-    //
-    // Derivation: akat_rx / akat_vanilla × rosu_vanilla × (25.18/26.0)
-    //   Wide:  1.56/1.45 × 1.5 × 0.968 = 1.56
-    //   Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
-    //   Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
-    //   VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
     const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
     const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
     const SLIDER_MULTIPLIER: f64 = 1.16;
     const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
-    // Calibration scalar: brings the full evaluator output to
-    // akat-equivalent magnitude. Applied at the very end.
-    // Accounts for the cumulative difference in angle bonus shapes
-    // (smoothstep is broader than sin²) plus SKILL_MULTIPLIER gap.
-    const AKAT_CALIBRATION: f64 = 0.92; // 0.968 (SKILL_MULTIPLIER) × ~0.95 (angle shape) = 0.92
+    const AKAT_CALIBRATION: f64 = 0.92;
 
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
     const FOLLOW_POINT_DISTANCE: f64 = 112.0;
     const FARM_MAX_NERF: f64 = 0.35;
     const CONSTANT_DIST_RATIO: f64 = 0.18;
-    const EDGE_TO_EDGE_THRESHOLD: f64 = 400.0;
+    const EDGE_TO_EDGE_THRESHOLD: f64 = 360.0;
     const CONSTANT_DIST_BPM_STRAIN_TIME: f64 = 85.7;
 
     const FLOW_MIN_EFF_BPM: f64 = 210.25;
@@ -213,14 +206,98 @@ impl AimRxEvaluator {
     const FLOW_DIST_FULL_NERF: f64 = 50.0;
     const FLOW_DIST_EXEMPT: f64 = 97.0;
 
-    // N/X / farm detection combined into a single system.
     const NX_MAX_NERF: f64 = 0.30;
-
-    // Aim slop: max nerf for constant-everything patterns.
     const SLOP_MAX_NERF: f64 = 0.35;
-
-    // Tech boost: max bonus for high-variance patterns.
     const TECH_MAX_BOOST: f64 = 0.08;
+
+    // Additional tuning constants
+    const TECH_OVERALL_CAP: f64 = 1.08;
+
+    const NEUTRAL_FLOW_DIST_RANGES: [(f64, f64); 5] = [
+        (90.0, 112.0),
+        (70.0, 90.0),
+        (50.0, 70.0),
+        (30.0, 50.0),
+        (10.0, 30.0),
+    ];
+
+    fn is_neutral_flow_pattern<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+    ) -> bool {
+        let (dist_mean, dist_stddev, n) = windowed_dist_stats(curr, diff_objects, ANGLE_WINDOW);
+        if n < 6 || dist_mean < 5.0 {
+            return false;
+        }
+
+        let cv = dist_stddev / dist_mean;
+        if cv > 0.25 {
+            return false;
+        }
+
+        Self::NEUTRAL_FLOW_DIST_RANGES.iter().any(|&(low, high)| {
+            dist_mean >= low && dist_mean <= high
+        })
+    }
+
+    // Farm streak considers all farm-related nerfs (N/X, slop, cross-screen).
+    // Flow aim is excluded.
+    fn recent_farm_streak<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+        window: usize,
+    ) -> usize {
+        let mut streak = 0;
+        let mut current = Some(curr);
+
+        while streak < window {
+            if let Some(obj) = current {
+                let nx_strength = detect_nx_pattern(obj, diff_objects, 4);
+
+                // Angle consistency
+                let (_, angle_stddev, angle_n) = windowed_angle_stats(obj, diff_objects, 4);
+
+                // Distance consistency
+                let (dist_mean, dist_stddev, dist_n) = windowed_dist_stats(obj, diff_objects, 4);
+
+                // Velocity consistency
+                let (vel_mean, vel_stddev, vel_n) = windowed_vel_stats(obj, diff_objects, 4);
+
+                let slop_like = (angle_n >= 3 && angle_stddev < 0.30)
+                    || (dist_n >= 3 && dist_mean > 0.0 && dist_stddev / dist_mean < 0.16)
+                    || (vel_n >= 3 && vel_mean > 0.0 && vel_stddev / vel_mean < 0.16);
+
+                // Cross-screen constant distance
+                let cross_like = {
+                    let curr_d = obj.lazy_jump_dist;
+                    if let Some(prev) = obj.previous(0, diff_objects) {
+                        let prev_d = prev.lazy_jump_dist;
+                        let max_d = curr_d.max(prev_d);
+                        if max_d > 80.0 {
+                            let change_ratio = (max_d - prev_d.min(curr_d)) / max_d;
+                            change_ratio < 0.20
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                let is_farm = nx_strength > 0.07 || slop_like || cross_like;
+
+                if is_farm {
+                    streak += 1;
+                    current = obj.previous(0, diff_objects);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        streak
+    }
 
     fn recent_no_followpoint_streak<'a>(
         curr: &'a OsuDifficultyObject<'a>,
@@ -330,7 +407,6 @@ impl AimRxEvaluator {
 
             wide_angle_bonus = Self::calc_wide_angle_bonus(curr_angle);
 
-            // ── Windowed variance repetition ────────────────────────
             let (_win_mean, win_stddev, win_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
@@ -341,11 +417,8 @@ impl AimRxEvaluator {
             };
 
             let rep_strength = 1.0 - variance_factor;
+            let wide_rep_nerf = rep_strength * 0.25;
 
-            // Overall nerf for repetitive wide angles (no BPM scaling)
-            let wide_rep_nerf = rep_strength * 0.25; // adjust coefficient as needed (0.20~0.35 feels reasonable)
-
-            // Apply nerf
             wide_angle_bonus *= 
                 angle_bonus 
                 * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER))
@@ -454,17 +527,11 @@ impl AimRxEvaluator {
         let is_flow_candidate = eff_bpm > Self::FLOW_MIN_EFF_BPM && no_followpoint_streak >= 6;
         let skip_farm_detection = no_followpoint_streak < 6;
 
-        let nx_nerf = 0.0;
-        let slop_nerf = 0.0;
         let mut cross_screen_nerf = 0.0;
         let mut flow_nerf = 0.0;
         let mut flow_active = false;
 
         // ── N/X alternating pattern severity ─────────────────────────────
-        // N patterns (zigzag) and X patterns (crossover) are trivial on
-        // RX because the cursor just bounces between two positions.
-        // Detection: check if consecutive angles alternate between two
-        // tight clusters. Nerf fades at high BPM (genuinely hard).
         let nx_severity = if !skip_farm_detection {
             let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
@@ -490,10 +557,6 @@ impl AimRxEvaluator {
         };
 
         // ── Aim slop detection ──────────────────────────────────────
-        // Constant velocity + constant distance + low angle variance
-        // = mechanical slop. The cursor follows a predictable path.
-        // This catches patterns that N/X detection misses (e.g. linear
-        // back-and-forth, square patterns, constant-speed circles).
         let slop_severity = if !skip_farm_detection {
             let (_, angle_stddev, angle_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
@@ -606,11 +669,20 @@ impl AimRxEvaluator {
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
 
+        let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
+
         if flow_active {
             aim_strain *= 1.0 - flow_nerf;
         } else {
             aim_strain *= 1.0 - farm_nerf;
-            aim_strain *= 1.0 + tech_boost;
+
+            // Delayed tech buff after farm + neutral pattern protection + overall cap
+            let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
+                && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects);
+
+            if apply_tech {
+                aim_strain *= (1.0 + tech_boost).min(Self::TECH_OVERALL_CAP);
+            }
         }
 
         // ── Akat calibration ────────────────────────────────────────
