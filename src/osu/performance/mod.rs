@@ -30,6 +30,7 @@ mod calculator;
 // pub mod rx_miss; //
 // pub mod ap_miss; //
 pub mod relax_marathon;
+pub mod marathon;
 pub mod speed_rework;
 pub mod gradual;
 pub mod auto_marathon;

@@ -125,7 +125,7 @@ impl OsuRatingCalculator<'_> {
             nerf = n_disabled;
         }
 
-        let fix = false;
+        let fix = true; // set to true because i believe the HDHR bug is fixed now.
 
         // If fix is true nerf = n_disabled (no nerf)
         if fix {

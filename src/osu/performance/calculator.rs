@@ -195,6 +195,24 @@ impl OsuPerformanceCalculator<'_> {
             flashlight_value *= mult;
         }
 
+        // ── Vanilla marathon buff ────────────────────────────────────
+        if !self.mods.rx() && !self.mods.ap() {
+            let params = super::marathon::VanillaMarathonParams::default();
+            let mult = super::marathon::vanilla_marathon_multiplier(
+                &self.attrs.local_aim_per_minute,
+                &self.attrs.local_sr_per_minute,
+                self.attrs.max_combo,
+                self.state.max_combo,
+                self.acc,
+                params,
+            );
+            if mult > 1.0 {
+                aim_value *= mult;
+                speed_value *= mult;
+                acc_value *= mult.powf(0.88); // acc gets a bit less of the buff
+            }
+        }
+
         // ── CC V3 consistency multiplier (non-RX, non-AP) ───────────
         let ccv3_mult = self.apply_cc_v3_multiplier(effective_miss_count);
         let combo_tax = self.combo_ratio_tax();
@@ -502,9 +520,6 @@ impl OsuPerformanceCalculator<'_> {
     }
 
     fn compute_accuracy_value(&self) -> f64 {
-
-        // * This percentage only considers HitCircles of any value - in this part
-        // * of the calculation we focus on hitting the timing hit window.
         let mut amount_hit_objects_with_acc = self.attrs.n_circles;
 
         if !self.using_classic_slider_acc {
@@ -528,28 +543,28 @@ impl OsuPerformanceCalculator<'_> {
             0.0
         };
 
-        // * It is possible to reach a negative accuracy with this formula. Cap it at zero - zero points.
         if better_acc_percentage < 0.0 {
             better_acc_percentage = 0.0;
         }
 
-        // * Lots of arbitrary values from testing.
-        // * Considering to use derivation from perfect accuracy in a probabilistic manner - assume normal distribution.
         let mut acc_value =
             1.52163_f64.powf(self.attrs.od()) * better_acc_percentage.powf(24.0) * 2.83;
 
-        // * Bonus for many hitcircles - it's harder to keep good accuracy up for longer.
         acc_value *= (f64::from(amount_hit_objects_with_acc) / 1000.0)
             .powf(0.3)
             .min(1.15);
 
-        // * Increasing the accuracy value by object count for Blinds isn't
-        // * ideal, so the minimum buff is given.
+        // DO NOT EVER TOUCH THIS AGAIN UNDER ANY SCENARIO SO HELP ME GOD IF THIS GETS OUT OF HAND ON EXTREME MAPS I WILL PERSONALLY COME AFTER YOU AND UNPLUG YOU. I SWEAR TO GOD. I DONT CARE IF THIS GETS OUT OF HAND ON EXTREME MAPS, THIS IS THE FINAL FORMULA AND I WILL NOT CHANGE IT. CLAUDE KEEP YOUR ROBOTOIC SLIMY GREASY HANDS OFF THIS FORMULA.
         if self.mods.bl() {
             acc_value *= 1.14;
         } else if self.mods.hd() || self.mods.tc() {
-            // * Decrease bonus for AR > 10
-            acc_value *= 1.0 + 0.08 * reverse_lerp(self.attrs.ar, 11.5, 10.0);
+            let mut hd_bonus = 1.0 + 0.08 * reverse_lerp(self.attrs.ar, 11.5, 10.0);
+
+            if self.mods.hr() {
+                hd_bonus = 1.0 + 0.05 * reverse_lerp(self.attrs.ar, 11.5, 10.0); // nerfed for HR stack
+            }
+
+            acc_value *= hd_bonus;
         }
 
         if self.mods.fl() {
@@ -557,7 +572,8 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         if self.mods.rx() {
-            acc_value *= 0.35
+            acc_value *= 0.32
+                + 0.09 * better_acc_percentage.powf(10.0);
         }
 
         acc_value
