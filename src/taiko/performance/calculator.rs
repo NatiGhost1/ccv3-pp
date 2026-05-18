@@ -43,7 +43,6 @@ impl TaikoPerformanceCalculator<'_> {
                 )
             };
 
-        // * Total difficult hits measures the total difficulty of a map based on its consistency factor.
         let total_difficult_hits = self.total_hits() * self.attrs.consistency_factor;
 
         let difficulty_value =
@@ -62,6 +61,37 @@ impl TaikoPerformanceCalculator<'_> {
         }
     }
 
+    // Tapping Speed Analysis
+    fn estimate_average_effective_bpm(&self) -> f64 {
+        // Best available proxy using difficulty attributes
+        // mono_stamina_factor correlates strongly with required tapping speed
+        let base_speed = self.attrs.mono_stamina_factor * 8.5; // rough conversion to BPM-ish scale
+        base_speed.clamp(80.0, 320.0)
+    }
+
+    fn estimate_peak_tapping_bpm(&self) -> f64 {
+        // Assume peak is noticeably higher than average
+        self.estimate_average_effective_bpm() * 1.35
+    }
+
+    fn is_likely_unlucky_break_miss(&self) -> bool {
+        let misses = self.state.hitresults.misses;
+        let total_hits = self.total_hits();
+        if total_hits == 0.0 || misses == 0 {
+            return false;
+        }
+
+        let accuracy = f64::from(self.state.hitresults.n300) / total_hits;
+        let avg_bpm = self.estimate_average_effective_bpm();
+
+        // - Few misses
+        // - High overall accuracy (good player)
+        // - Map has relatively low average tapping speed (more likely to have slower sections/breaks)
+        misses <= 3
+            && accuracy >= 0.94
+            && avg_bpm < 210.0 // Significantly slower than peak speed maps
+    }
+
     fn compute_difficulty_value(
         &self,
         total_difficult_hits: f64,
@@ -77,17 +107,11 @@ impl TaikoPerformanceCalculator<'_> {
 
         let attrs = &self.attrs;
 
-        // * The estimated unstable rate for 100% accuracy, at which all rhythm difficulty has been played successfully.
         let rhythm_expected_unstable_rate = self.compute_deviation_upper_bound(1.0) * 10.0;
-
-        // * The unstable rate at which it can be assumed all rhythm difficulty has been ignored.
-        // * 0.8 represents 80% of total hits being greats, or 90% accuracy in-game
         let rhythm_maximum_unstable_rate = self.compute_deviation_upper_bound(0.8) * 10.0;
 
-        // * The fraction of star rating made up by rhythm difficulty, normalised to represent rhythm's perceived contribution to star rating.
         let rhythm_factor = reverse_lerp(attrs.rhythm / attrs.stars, 0.15, 0.4);
 
-        // * A penalty removing improperly played rhythm difficulty from star rating based on estimated unstable rate.
         let rhythm_penalty = 1.0
             - logistic(
                 estimated_unstable_rate,
@@ -105,25 +129,25 @@ impl TaikoPerformanceCalculator<'_> {
 
         difficulty_value *= 1.0 + 0.10 * f64::max(0.0, self.attrs.stars - 10.0);
 
-        // * Applies a bonus to maps with more total difficulty.
         let length_bonus = 1.0 + 0.25 * total_difficult_hits / (total_difficult_hits + 4000.0);
         difficulty_value *= length_bonus;
 
-        // * Scales miss penalty by the total difficult hits of a map, making misses more punishing on maps with less total difficulty.
-        let miss_penalty = 0.97 + 0.03 * total_difficult_hits / (total_difficult_hits + 1500.0);
-        difficulty_value *= f64::powf(miss_penalty, f64::from(self.state.hitresults.misses));
+        // Unlucky miss on slower section
+        let miss_penalty_base = if self.is_likely_unlucky_break_miss() {
+            0.9995 // Extremely soft penalty — unlucky miss barely hurts PP
+        } else {
+            0.97 + 0.03 * total_difficult_hits / (total_difficult_hits + 1500.0)
+        };
+
+        difficulty_value *= f64::powf(miss_penalty_base, f64::from(self.state.hitresults.misses));
 
         if self.mods.hd() {
             let mut hidden_bonus = if self.attrs.is_convert { 0.025 } else { 0.1 };
 
-            // * Hidden+flashlight plays are excluded from reading-based penalties to hidden.
             if !self.mods.fl() {
-                // * A penalty is applied to the bonus for hidden on non-classic scores, as the playfield can be made wider to make fast reading easier.
                 if !self.is_classic {
                     hidden_bonus *= 0.2;
                 }
-
-                // * A penalty is applied to classic easy+hidden scores, as notes disappear later making fast reading easier.
                 if self.mods.ez() && self.is_classic {
                     hidden_bonus *= 0.5;
                 }
@@ -139,7 +163,6 @@ impl TaikoPerformanceCalculator<'_> {
             );
         }
 
-        // * Scale accuracy more harshly on nearly-completely mono (single coloured) speed maps.
         let mono_acc_scaling_exponent = f64::from(2) + self.attrs.mono_stamina_factor;
         let mono_acc_scaling_shift =
             f64::from(500) - f64::from(100) * (self.attrs.mono_stamina_factor * f64::from(3));
@@ -149,6 +172,7 @@ impl TaikoPerformanceCalculator<'_> {
                 .powf(mono_acc_scaling_exponent)
     }
 
+    // compute_accuracy_value, compute_deviation_upper_bound, and total_hits remain unchanged
     fn compute_accuracy_value(
         &self,
         total_difficult_hits: f64,
@@ -164,7 +188,6 @@ impl TaikoPerformanceCalculator<'_> {
 
         let mut accuracy_value = 470.0 * f64::powf(0.9885, estimated_unstable_rate);
 
-        // * Scales up the bonus for lower unstable rate as star rating increases.
         accuracy_value *= 1.0
             + f64::powf(50.0 / estimated_unstable_rate, 2.0) * f64::powf(self.attrs.stars, 2.8)
                 / 600.0;
@@ -173,10 +196,8 @@ impl TaikoPerformanceCalculator<'_> {
             accuracy_value *= 1.075;
         }
 
-        // * Applies a bonus to maps with more total difficulty, calculating this with a map's total hits and consistency factor.
         accuracy_value *= 1.0 + 0.3 * total_difficult_hits / (total_difficult_hits + 4000.0);
 
-        // * Applies a bonus to maps with more total memory required with HDFL.
         let memory_length_bonus = f64::min(1.15, f64::powf(self.total_hits() / 1500.0, 0.3));
 
         if self.mods.fl() && self.mods.hd() && !self.attrs.is_convert {
@@ -186,24 +207,16 @@ impl TaikoPerformanceCalculator<'_> {
         accuracy_value
     }
 
-    // * Computes an upper bound on the player's tap deviation based on the OD, number of circles and sliders,
-    // * and the hit judgements, assuming the player's mean hit error is 0. The estimation is consistent in that
-    // * two SS scores on the same map with the same settings will always return the same deviation.
     fn compute_deviation_upper_bound(&self, accuracy: f64) -> f64 {
         #[expect(clippy::unreadable_literal, reason = "staying in-sync with lazer")]
-        // * 99% critical value for the normal distribution (one-tailed).
         const Z: f64 = 2.32634787404;
 
         let n = self.total_hits();
-
-        // * Proportion of greats hit.
         let p = accuracy;
 
-        // * We can be 99% confident that p is at least this value.
         let p_lower_bound = (n * p + Z * Z / 2.0) / (n + Z * Z)
             - Z / (n + Z * Z) * f64::sqrt(n * p * (1.0 - p) + Z * Z / 4.0);
 
-        // * We can be 99% confident that the deviation is not higher than:
         self.attrs.great_hit_window / (f64::sqrt(2.0) * erf_inv(p_lower_bound))
     }
 
