@@ -1,13 +1,13 @@
 [package]
-name = "rosu-ccv3-pp"
+name = "ccv3-pp"
 version = "4.0.1"
 edition = "2024"
 authors = ["MaxOhn <ohn.m@hotmail.de>", "NatiGhost1 <josh.miller83@outlook.com>"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/MaxOhn/rosu-pp"
+repository = "https://github.com/NatiGhost1/ccv3-pp"
 documentation = "https://docs.rs/rosu-pp/"
-description = "Difficulty and performance calculation for osu!"
+description = "PP and star calculation for all osu! gamemodes"
 keywords = ["osu", "pp", "stars", "performance", "difficulty"]
 
 [features]

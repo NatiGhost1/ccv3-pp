@@ -70,6 +70,7 @@ impl Default for SpeedReworkParams {
 // difficulty/speed_precal.rs and reading the precomputed value off
 // OsuDifficultyAttributes::speed_rework_mult_*.
 
+#[allow(dead_code)]
 pub fn compute_vanilla_speed_multiplier(
     _objects: &[OsuDifficultyObject<'_>],
     _dominant_tap_bpm: f64,
@@ -78,6 +79,7 @@ pub fn compute_vanilla_speed_multiplier(
     1.0
 }
 
+#[allow(dead_code)]
 pub fn compute_autopilot_speed_multiplier(
     _objects: &[OsuDifficultyObject<'_>],
     _dominant_tap_bpm: f64,

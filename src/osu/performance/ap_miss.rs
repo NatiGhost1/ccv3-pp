@@ -27,7 +27,7 @@
 pub(crate) fn ap_miss_multiplier(
     od: f64,
     dominant_tap_bpm: f64,
-    chunk_hardness: &[f64],
+    _chunk_hardness: &[f64],
     chunk_avg_delta: &[f64],
     n300: u32,
     n100: u32,

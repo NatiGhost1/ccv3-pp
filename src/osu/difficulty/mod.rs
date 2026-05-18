@@ -29,7 +29,7 @@ use super::attributes::OsuDifficultyAttributes;
 
 pub mod evaluators;
 pub mod gradual;
-mod object;
+pub mod object;
 pub mod rating;
 pub mod scaling_factor;
 pub mod skills;
@@ -180,7 +180,7 @@ impl DifficultyValues {
         // ═══ CC V3: extract data from diff_objects before they drop ═
         // Build SpeedObjectData for tap_bpm and speed_precal.
         // Also extract per-object speed strains from the speed skill.
-        let clock_rate = difficulty.get_clock_rate();
+        let _clock_rate = difficulty.get_clock_rate();
 
         let speed_object_data: Vec<tap_bpm::SpeedObjectData> = diff_objects
             .iter()
@@ -192,30 +192,42 @@ impl DifficultyValues {
             .collect();
 
         // Object strains from the speed skill (for tap_bpm top-10% filtering)
-        let object_strains: Vec<f64> = skills.speed.get_object_strains();
+        let object_strains: Vec<f64> = skills.speed.object_strains().to_vec();
 
         // Strain peaks for local_sr_per_minute (marathon decay)
-        let aim_peaks: Vec<f64> = skills.aim.cloned_strain_peaks();
-        let speed_peaks: Vec<f64> = skills.speed.cloned_strain_peaks();
+        let aim_peaks: Vec<f64> = skills.aim.clone().into_current_strain_peaks();
+        let speed_peaks: Vec<f64> = skills.speed.clone().into_current_strain_peaks();
 
         // Compute dominant_tap_bpm
         if !object_strains.is_empty() && !speed_object_data.is_empty() {
             attrs.dominant_tap_bpm =
-                tap_bpm::dominant_tap_bpm(&object_strains, &speed_object_data, 0.10);
+                tap_bpm::dominant_tap_bpm_from_owned(&object_strains, &speed_object_data, 0.10);
         }
 
         // Compute speed rework multipliers
-        let sr_params = speed_precal::SpeedReworkParams::default();
-        attrs.speed_rework_mult_vanilla =
-            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, false);
-        attrs.speed_rework_mult_autopilot =
-            speed_precal::compute_speed_rework_mult(&speed_object_data, &sr_params, true);
+        let (vanilla_mult, autopilot_mult) =
+            speed_precal::precompute_speed_rework_from_owned(&speed_object_data, attrs.dominant_tap_bpm);
+        attrs.speed_rework_mult_vanilla = vanilla_mult;
+        attrs.speed_rework_mult_autopilot = autopilot_mult;
 
         // Compute local_sr_per_minute for marathon decay
         attrs.local_sr_per_minute = crate::osu::performance::relax_marathon::local_sr_per_minute(
             &aim_peaks,
             &speed_peaks,
         );
+
+        // Compute AP-only speed/rhythm local SR for autopilot marathon decay.
+        attrs.local_autopilot_sr_per_minute =
+            crate::osu::performance::auto_marathon::local_sr_per_minute(&speed_peaks);
+
+        // Compute AP-only aim intensity per minute used only to classify
+        // low-BPM, high-aim sections that should not be treated like marathons.
+        attrs.local_aim_per_minute =
+            crate::osu::performance::auto_marathon::local_aim_per_minute(&aim_peaks);
+
+        // Compute local_bpm_per_minute for autopilot marathon decay
+        let delta_times: Vec<f64> = diff_objects.iter().map(|obj| obj.adjusted_delta_time).collect();
+        attrs.local_bpm_per_minute = crate::osu::performance::auto_marathon::compute_local_bpm_per_minute(&diff_objects, &delta_times);
 
         // Compute avg_jump_dist and median_delta_time
         let mut dist_sum = 0.0;

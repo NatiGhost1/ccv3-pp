@@ -49,7 +49,7 @@ impl OsuRatingCalculator<'_> {
         }
 
         if self.mods.rx() {
-            aim_rating = 1.0; // aim_rx.rs handles aim for relax specifically no aim rating nerf
+            aim_rating *= 1.0; // aim_rx.rs handles aim for relax specifically no aim rating nerf
         }
 
         if self.mods.nf() {
@@ -108,12 +108,43 @@ impl OsuRatingCalculator<'_> {
 
         let mut speed_rating = Self::calculate_difficulty_rating(speed_difficulty_value);
 
-        if self.mods.ap() {
-            speed_rating *= 0.87; // 0.5 speed rating is way too fucking harsh (pp devs were on crack)
+        let mut nerf = 0.78;
+        let n_disabled = 1.0;
+        
+        // grace set to false by default
+        let mut grace = false;
+        
+        // Disables HDHR nerf for NF/AP
+        if self.mods.ap() || self.mods.nf() {
+            grace = true
+        } else {
+            grace = false  // Otherwise nerf remains active
         }
 
+        if grace {
+            nerf = n_disabled;
+        }
+
+        let fix = true; // set to true because i believe the HDHR bug is fixed now.
+
+        // If fix is true nerf = n_disabled (no nerf)
+        if fix {
+            nerf = n_disabled;
+        }
+
+        // *0.85 seems like a fair balence between 4 key, 2 hand, and "default" tappers
+        if self.mods.ap() {
+            speed_rating *= 0.85;
+        }
+
+        // Note: currently nf speed rating is way less nerfed than intended due to the HDHR bug
         if self.mods.nf() {
-            speed_rating *= 0.7
+            speed_rating *= 0.7;
+        }
+        
+        // Compensate for HDHR being disproportinately overweight (temporary until fix)
+        if self.mods.hr() && self.mods.hd() {
+            speed_rating *= nerf;
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {
@@ -129,6 +160,7 @@ impl OsuRatingCalculator<'_> {
                 * (f64::from(self.total_hits) / 2000.0).log10()
                 * 0.5;
 
+        // Autopilot awards 20% of the standard bonus instead of removing it entirely.
         let ar_factor = if self.mods.ap() {
         if self.approach_rate > 10.33 {
             0.3 * (self.approach_rate - 10.33) * 0.2 // 20% of normal bonus
@@ -177,11 +209,13 @@ impl OsuRatingCalculator<'_> {
         if self.mods.rx() {
             flashlight_rating *= 0.72; // fl on relax is easier than vn (less reading don't need to tap) but still hard unlike ap
         } else if self.mods.ap() {
-            flashlight_rating *= 0.28; // autopilot players just need to follow a rhythm this makes fl trivial
-        }
+            flashlight_rating *= 0.35; // Players just need to follow a rhythm this makes fl easier
+        } else if self.mods.ap() && self.mods.ez() || self.mods.ap() && self.mods.hr() {
+            flashlight_rating *= 0.28 // flashlight is --> ESSENTIALLY <-- trivial for top autopilot players
+        } // Again ----------> ESSENTIALLY <----------- trivial flashlight will always be hard
 
         if self.mods.nf() {
-            flashlight_rating *= 0.85
+            flashlight_rating *= 0.1; // Giving high fl rating for nf doesn't make sense since they will likely fail 
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {

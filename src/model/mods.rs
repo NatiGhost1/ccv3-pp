@@ -317,6 +317,7 @@ impl_has_mod! {
     nf: + NoFail ["NoFail"],
     ez: + Easy ["Easy"],
     td: + TouchDevice ["TouchDevice"],
+    dt: + DoubleTime ["DoubleTime"],
     hd: + Hidden ["Hidden"],
     hr: + HardRock ["HardRock"],
     rx: + Relax ["Relax"],
