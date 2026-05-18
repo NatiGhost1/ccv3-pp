@@ -99,6 +99,33 @@ fn detect_nx_pattern<'a>(
     }
 }
 
+fn windowed_vel_stats<'a>(
+    curr: &'a OsuDifficultyObject<'a>,
+    diff_objects: &'a [OsuDifficultyObject<'a>],
+    window: usize,
+) -> (f64, f64, usize) {
+    let mut vels: Vec<f64> = Vec::with_capacity(window + 1);
+    if curr.adjusted_delta_time > 0.0 {
+        vels.push(curr.lazy_jump_dist / curr.adjusted_delta_time);
+    }
+    for back in 0..window {
+        if let Some(prev) = curr.previous(back, diff_objects) {
+            if prev.adjusted_delta_time > 0.0 {
+                vels.push(prev.lazy_jump_dist / prev.adjusted_delta_time);
+            }
+        } else {
+            break;
+        }
+    }
+    let n = vels.len();
+    if n < 2 {
+        return (0.0, 0.0, n);
+    }
+    let mean = vels.iter().sum::<f64>() / n as f64;
+    let var = vels.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt(), n)
+}
+
 impl AimEvaluator {
     const WIDE_ANGLE_MULTIPLIER: f64 = 1.5;
     const ACUTE_ANGLE_MULTIPLIER: f64 = 2.55;
@@ -110,11 +137,14 @@ impl AimEvaluator {
     // magnitude. Rosu's SKILL_MULTIPLIER is 26.0 vs akat's 25.18 (+3.3%)
     // and the smoothstep angle shapes produce broader bonuses than akat's
     // sin². This scalar compensates at the end.
-    const AKAT_CALIBRATION: f64 = 0.94;
+    const AKAT_CALIBRATION: f64 = 0.94; 
 
     // CC V3: N/X pattern nerf for vanilla aim (lighter than RX since
     // tapping + aiming N/X patterns is genuinely harder than on RX).
     const NX_MAX_NERF_VANILLA: f64 = 0.12;
+
+    // Aim slop: max nerf for constant-everything patterns.
+    const SLOP_MAX_NERF: f64 = 0.05;
 
     #[expect(clippy::too_many_lines, reason = "staying in-sync with lazer")]
     pub fn evaluate_diff_of<'a>(
@@ -317,8 +347,8 @@ impl AimEvaluator {
         // N/X patterns on vanilla require tapping + aiming simultaneously,
         // so they're genuinely harder than on RX. Only a mild nerf for
         // extreme repetition at low BPM.
+        let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
         {
-            let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
             let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
             if nx_strength > 0.1 {
@@ -338,6 +368,44 @@ impl AimEvaluator {
                 aim_strain *= 1.0 - Self::NX_MAX_NERF_VANILLA * nx_severity;
             }
         }
+
+        // ── Aim slop detection ──────────────────────────────────────
+        // Constant velocity + constant distance + low angle variance
+        // = mechanical slop. The cursor follows a predictable path.
+        // This catches patterns that N/X detection misses (e.g. linear
+        // back-and-forth, square patterns, constant-speed circles).
+        let mut slop_nerf = 0.0;
+        {
+            let (_, angle_stddev, angle_n) =
+                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (dist_mean, dist_stddev, dist_n) =
+                windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (vel_mean, vel_stddev, vel_n) =
+                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+
+            if angle_n >= 4 && dist_n >= 4 && vel_n >= 4 {
+                // Angle uniformity: stddev < 0.3 = highly uniform
+                let angle_uniformity = (1.0 - (angle_stddev / 0.3).clamp(0.0, 1.0)).max(0.0);
+
+                // Distance uniformity: CV < 0.15 = very constant spacing
+                let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 1.0 };
+                let dist_uniformity = (1.0 - (dist_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
+
+                // Velocity uniformity: CV < 0.15 = constant speed
+                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 1.0 };
+                let vel_uniformity = (1.0 - (vel_cv / 0.15).clamp(0.0, 1.0)).max(0.0);
+
+                // All three must be uniform for the nerf to fire
+                let slop_severity = angle_uniformity * dist_uniformity * vel_uniformity;
+
+                // BPM fade: less severe at high BPM
+                let bpm_fade = 1.0 - ((eff_bpm - 400.0) / 150.0).clamp(0.0, 1.0);
+
+                slop_nerf = Self::SLOP_MAX_NERF * slop_severity * bpm_fade;
+            }
+        }
+
+        aim_strain *= 1.0 - slop_nerf;
 
         // ── CC V3: akat calibration ─────────────────────────────────
         aim_strain *= Self::AKAT_CALIBRATION;

@@ -28,7 +28,7 @@ pub(crate) fn rx_miss_multiplier(
     chunk_hardness: &[f64],
     chunk_avg_delta: &[f64],
     map_median_delta: f64,
-    n300: u32,
+    _n300: u32,
     n100: u32,
     n50: u32,
     misses: u32,

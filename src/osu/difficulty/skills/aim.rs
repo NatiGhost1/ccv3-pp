@@ -16,8 +16,8 @@ define_skill! {
     #[derive(Clone)]
     pub struct Aim: StrainSkill => [OsuDifficultyObject<'a>][OsuDifficultyObject<'a>] {
         include_sliders: bool,
-        /// CC V3: when true, dispatches to AimRxEvaluator instead of
-        /// AimEvaluator for Relax-specific aim strain.
+        // CC V3: when true, dispatches to AimRxEvaluator instead of
+        // AimEvaluator for Relax-specific aim strain.
         has_relax: bool,
         current_strain: f64 = 0.0,
         slider_strains: Vec<f64> = Vec::with_capacity(64),
