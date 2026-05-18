@@ -1,4 +1,4 @@
-// CC V3: Relax-specific aim evaluator for rosu-pp.
+// Relax-specific aim evaluator for ccv3-pp.
 //
 // Purpose:
 //   * N/X pattern detection — detects alternating zigzag and crossover patterns
@@ -211,7 +211,7 @@ impl AimRxEvaluator {
     const TECH_MAX_BOOST: f64 = 0.08;
 
     // Additional tuning constants
-    const TECH_OVERALL_CAP: f64 = 1.08;
+    const TECH_OVERALL_CAP: f64 = 1.08; // Low cap (runaway buffs)
 
     const NEUTRAL_FLOW_DIST_RANGES: [(f64, f64); 5] = [
         (90.0, 112.0),
@@ -650,21 +650,35 @@ impl AimRxEvaluator {
             }
         }
 
-        let mut tech_boost = 0.0;
-        if !flow_active && !skip_farm_detection {
+        // ── NEW: Very harsh flow aim hard-cap ─────────────────────────────
+        // NOTE: Flow aim is deliberately nerfed much harder than jump aim,
+        // N/X patterns, or slop. This is intentional to prevent flow-heavy
+        // maps from being overrated and to stop players who specialize
+        // heavily in flow aim (e.g. dolphin) from dominating top ranks.
+        // Flow becoming somewhat trivial on many maps is an acceptable
+        // tradeoff for now until better detection is implemented.
+        let forced_flow_cap = if flow_active {
             let (_, angle_stddev, angle_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-            let (vel_mean, vel_stddev, vel_n) =
-                windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (dist_mean, dist_stddev, dist_n) =
+                windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
-            if angle_n >= 4 && vel_n >= 4 {
-                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
-                let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
-                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
-                let tech_signal = angle_variety * vel_variety;
-                tech_boost = Self::TECH_MAX_BOOST * tech_signal;
+            if angle_n >= 5 && dist_n >= 5 {
+                let angle_cv = angle_stddev / flow_mean.max(0.1);
+                let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 0.0 };
+
+                // Extra harsh on consistent/mechanical flow
+                if angle_cv < 0.28 && dist_cv < 0.20 {
+                    0.62
+                } else {
+                    0.71
+                }
+            } else {
+                0.71
             }
-        }
+        } else {
+            1.0
+        };
 
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
@@ -673,10 +687,10 @@ impl AimRxEvaluator {
 
         if flow_active {
             aim_strain *= 1.0 - flow_nerf;
+            aim_strain *= forced_flow_cap; // ← very harsh flow hard-cap
         } else {
             aim_strain *= 1.0 - farm_nerf;
 
-            // Delayed tech buff after farm + neutral pattern protection + overall cap
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
                 && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects);
 
