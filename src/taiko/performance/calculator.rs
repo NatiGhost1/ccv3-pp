@@ -71,7 +71,7 @@ impl TaikoPerformanceCalculator<'_> {
 
     fn estimate_peak_tapping_bpm(&self) -> f64 {
         // Assume peak is noticeably higher than average
-        self.estimate_average_effective_bpm() * 1.35
+        self.estimate_average_effective_bpm() * 1.20 // og = 1.35 but i think that could be too high 
     }
 
     fn is_likely_unlucky_break_miss(&self) -> bool {

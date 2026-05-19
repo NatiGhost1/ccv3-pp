@@ -293,7 +293,7 @@ impl OsuPerformanceCalculator<'_> {
             flashlight_value *= nf_mult;
         }
 
-        // ── Targeted PP-layer nerfs ─────────────────────────────────
+        // CCV3 targeted PP-layer nerfs
 
         // OD < 9 accuracy nerf
         if self.attrs.od() < 9.0 && !self.mods.rx() {
@@ -560,8 +560,9 @@ impl OsuPerformanceCalculator<'_> {
         } else if self.mods.hd() || self.mods.tc() {
             let mut hd_bonus = 1.0 + 0.08 * reverse_lerp(self.attrs.ar, 11.5, 10.0);
 
+            // HR nerfs the HD bonus when both are active
             if self.mods.hr() {
-                hd_bonus = 1.0 + 0.05 * reverse_lerp(self.attrs.ar, 11.5, 10.0); // nerfed for HR stack
+                hd_bonus = 1.0 + 0.05 * reverse_lerp(self.attrs.ar, 11.5, 10.0); 
             }
 
             acc_value *= hd_bonus;
@@ -572,8 +573,8 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         if self.mods.rx() {
-            acc_value *= 0.32
-                + 0.09 * better_acc_percentage.powf(10.0);
+            let accuracy_multiplier = 0.32 + 0.09 * better_acc_percentage.powf(10.0);
+            acc_value *= accuracy_multiplier
         }
 
         acc_value
@@ -850,8 +851,6 @@ impl OsuPerformanceCalculator<'_> {
             self.attrs.n_large_ticks - self.state.hitresults.large_tick_hits
         }
     }
-
-    // ── CC V3 helper methods ────────────────────────────────────────
 
     /// CC V3 combo-ratio tax. Light tax based on achieved combo ratio.
     /// FC passes through untouched.

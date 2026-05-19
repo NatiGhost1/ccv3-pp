@@ -8,7 +8,7 @@ pub struct VanillaMarathonParams {
     pub balance_tolerance: f64,
     pub min_sustained_minutes: usize,
     pub max_combo_cap: u32,
-    pub max_buff: f64,           // Hard global cap
+    pub max_buff: f64,
 }
 
 impl Default for VanillaMarathonParams {
@@ -19,12 +19,12 @@ impl Default for VanillaMarathonParams {
             balance_tolerance: 0.62,
             min_sustained_minutes: 3,
             max_combo_cap: 8000,
-            max_buff: 1.10, // Maximum +10% buff (i dont want this to get out of hand on extreme maps)
+            max_buff: 1.10,
         }
     }
 }
 
-// Helper functions (reused from other marathon files)
+#[allow(dead_code)]
 fn difficulty_value_from_peaks(peaks: &[f64]) -> f64 {
     let mut v: Vec<f64> = peaks.iter().copied().filter(|x| *x > 0.0).collect();
     if v.is_empty() {
@@ -55,6 +55,7 @@ fn difficulty_value_from_peaks(peaks: &[f64]) -> f64 {
     difficulty
 }
 
+#[allow(dead_code)]
 fn star_from_peaks(peaks: &[f64]) -> f64 {
     let value = difficulty_value_from_peaks(peaks);
     let rating = value.sqrt() * 0.0675;
@@ -69,6 +70,7 @@ fn star_from_peaks(peaks: &[f64]) -> f64 {
         * ((100_000.0 / 2.0_f64.powf(1.0 / 1.1) * perf).cbrt() + 4.0)
 }
 
+#[allow(dead_code)]
 pub fn local_sr_per_minute(strains: &[f64]) -> Vec<f64> {
     const PEAK_SECTION_LEN_MS: f64 = 400.0;
     const MINUTE_MS: f64 = 60_000.0;
@@ -96,7 +98,8 @@ pub fn vanilla_marathon_multiplier(
 ) -> f64 {
     if local_aim_sr.len() < params.min_sustained_minutes 
         || local_aim_sr.len() != local_speed_sr.len() 
-        || map_max_combo < params.min_combo_for_marathon {
+        || map_max_combo < params.min_combo_for_marathon 
+    {
         return 1.0;
     }
 
@@ -125,7 +128,7 @@ pub fn vanilla_marathon_multiplier(
     // Base buff from sustained balanced high-strain sections
     let base_buff = 1.0 + 0.027 * (sustained_good_minutes as f64 - 2.0).max(0.0).sqrt();
 
-    // Combo scaling with diminishing returns (capped at 8000)
+    // Combo scaling
     let effective_combo = (player_max_combo as f64).min(params.max_combo_cap as f64);
     let combo_ratio = (effective_combo / map_max_combo as f64).clamp(0.0, 1.0);
 
@@ -137,24 +140,18 @@ pub fn vanilla_marathon_multiplier(
 
     let mut mult = base_buff * combo_ratio * length_factor;
 
-    // ── Accuracy scaling: Exponential + Combo-weighted ─────────────────
+    // Accuracy scaling
     let raw_acc_factor = if acc >= 0.985 {
         1.0
     } else {
-        // Base exponential curve
         (-14.5 * (0.985 - acc)).exp().clamp(0.34, 1.0)
     };
 
-    // Combo scaling for exponent: LOWER combo = harsher nerf, HIGHER combo = lighter nerf
-    let effective_combo = (player_max_combo as f64).min(params.max_combo_cap as f64);
-    
-    // Exponent decreases as combo increases (less harsh on long maps)
     let combo_exponent = 2.8 * (3500.0 / effective_combo.max(800.0)).clamp(0.65, 2.8);
-
     let acc_factor = raw_acc_factor.powf(combo_exponent);
 
     mult *= acc_factor;
 
-    // Final safety clamps - NEVER nerf + hard buff cap
+    // Final clamps: never nerf below 1.0, hard cap on buff
     mult.clamp(1.0, params.max_buff)
 }
