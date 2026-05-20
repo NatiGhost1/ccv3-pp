@@ -206,8 +206,11 @@ impl AimRxEvaluator {
     const FLOW_DIST_FULL_NERF: f64 = 50.0;
     const FLOW_DIST_EXEMPT: f64 = 97.0;
 
+    #[warn(dead_code)]
     const NX_MAX_NERF: f64 = 0.30;
+    #[warn(dead_code)]
     const SLOP_MAX_NERF: f64 = 0.35;
+    
     const TECH_MAX_BOOST: f64 = 0.08;
 
     // Additional tuning constants

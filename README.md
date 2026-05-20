@@ -1,4 +1,4 @@
-# CCV3: Rosu-based Combo Consistency
+# CCV3: Combo Consistency V3
 
 This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-pp`. While initially conceived as a fallback for potential compatibility issues with the modified Akatsuki system, it has been promoted to the primary implementation due to `rosu`'s superior developer experience—despite the underlying logic being more sophisticated. CCV3 is a fork of [`rosu-pp`](https://github.com/MaxOhn/rosu-pp).
 
@@ -7,12 +7,9 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 ## [TODO]
 
 ### System Integration & Porting
-- Port and calibrate this refined calculation logic over to the Akat-based PP system for cross-compatibility.
+- Port and calibrate this refined calculation logic over to the Akat-based PP system (legacy ccv3) for cross-compatibility.
 
 ## [POTENTIAL]
-
-### Buff Marathon Maps With a Relatively Equal Balance of Aim and Speed Strain in Vanilla
-- Instead of nerfing longer maps like RX and AP, reward longer maps that maintain a balance of aim and speed strain, rather than letting their value decay toward zero.
 
 ## [IMPLEMENTED] 
 
@@ -44,6 +41,9 @@ This system implements **CCV3** logic utilizing `rosu-pp` rather than `akatsuki-
 - Rework Autopilot marathon decay to rely primarily on speed and rhythm rather than aim strain, with aim only used to detect low-BPM aim-heavy sections.
 - Add BPM-aware AP decay scaling and a small guaranteed nerf for maps longer than three minutes.
 - Restore and refine Relax marathon handling with high-BPM softening around 410 BPM and smoother BPM-based multiplier behavior.
+
+    ### Buff Marathon Maps With a Relatively Equal Balance of Aim and Speed Strain in Vanilla
+- Instead of nerfing longer maps like RX and AP, reward longer maps that maintain a balance of aim and speed strain, rather than letting their value decay toward zero.
 
 ## [ABANDONED]
 
