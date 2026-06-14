@@ -117,7 +117,18 @@ impl OsuPerformanceCalculator<'_> {
                 .min(total_hits);
         }
             let penalty_miss_count = if self.mods.rx() {
-                f64::from(self.state.hitresults.misses)   
+                // CC V3 v3: strain-peak based relax miss model (see rx_miss.rs).
+                // This REPLACES the literal miss count as the primary lever for
+                // relax: misses on the highest strain peaks (first 2) and on
+                // unlucky low peaks cost less; mid peaks are normal; Oks/Mehs
+                // inflate it with hard caps + a variance-aware soft stop.
+                super::rx_miss::rx_strain_weighted_misses(
+                    &self.attrs.rx_chunk_hardness,
+                    self.state.hitresults.n300,
+                    self.state.hitresults.n100,
+                    self.state.hitresults.n50,
+                    self.state.hitresults.misses,
+                )
             } else {
                 effective_miss_count
             };
@@ -245,25 +256,10 @@ impl OsuPerformanceCalculator<'_> {
             flashlight_value *= ap_mult;
         }
 
-        // ── RX standalone miss system ───────────────────────────────
-        if self.mods.rx() && self.state.hitresults.misses > 0 {
-            let rx_mult = rx_miss_multiplier(
-                &self.attrs.rx_chunk_hardness,
-                &self.attrs.rx_chunk_avg_delta,
-                self.attrs.median_delta_time,
-                self.state.hitresults.n300,
-                self.state.hitresults.n100,
-                self.state.hitresults.n50,
-                self.state.hitresults.misses,
-                self.state.max_combo,
-                self.attrs.max_combo,
-            );
-            pp *= rx_mult;
-            aim_value *= rx_mult;
-            speed_value *= rx_mult;
-            acc_value *= rx_mult;
-            flashlight_value *= rx_mult;
-        }
+        // ── RX miss handling ────────────────────────────────────────
+        // Relax misses are handled primarily via `penalty_miss_count` above
+        // (the v3 strain-peak model in rx_miss.rs), which feeds the main aim
+        // miss-penalty. No secondary multiplier is applied here anymore.
 
         // ── NF standalone system ─────────────────────────────────────
         // NoFail has its own performance model (see nofail.rs):
@@ -1045,6 +1041,7 @@ impl OsuPerformanceCalculator<'_> {
 
 // ── RX Miss ─────────────────────────────────────
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn rx_miss_multiplier(
     chunk_hardness: &[f64],
     chunk_avg_delta: &[f64],
@@ -1218,6 +1215,7 @@ fn rx_miss_multiplier(
     mult.max(0.35)
 }
 
+#[allow(dead_code)]
 fn cubic_ease(x: f64) -> f64 {
     if x < 0.5 {
         4.0 * x * x * x
@@ -1226,6 +1224,7 @@ fn cubic_ease(x: f64) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 fn percentile_ranks(values: &[f64]) -> Vec<f64> {
     let n = values.len();
     if n <= 1 {
@@ -1244,6 +1243,7 @@ fn percentile_ranks(values: &[f64]) -> Vec<f64> {
     ranks
 }
 
+#[allow(dead_code)]
 fn flat_fallback(misses: u32) -> f64 {
     0.80_f64.powf(f64::from(misses)).max(0.40)
 }
