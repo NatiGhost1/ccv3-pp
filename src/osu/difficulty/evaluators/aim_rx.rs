@@ -128,6 +128,38 @@ fn windowed_vel_stats<'a>(
     (mean, var.sqrt(), n)
 }
 
+/// Windowed stats over the gap (delta) TIMES of recent objects — used to spot
+/// a "stream signature": a consistent, fast 1/4 rhythm. Returns
+/// (mean_delta_ms, stddev_delta_ms, count).
+fn windowed_delta_stats<'a>(
+    curr: &'a OsuDifficultyObject<'a>,
+    diff_objects: &'a [OsuDifficultyObject<'a>],
+    window: usize,
+) -> (f64, f64, usize) {
+    let mut deltas: Vec<f64> = Vec::with_capacity(window + 1);
+    if curr.adjusted_delta_time > 0.0 {
+        deltas.push(curr.adjusted_delta_time);
+    }
+
+    for back in 0..window {
+        if let Some(prev) = curr.previous(back, diff_objects) {
+            if prev.adjusted_delta_time > 0.0 {
+                deltas.push(prev.adjusted_delta_time);
+            }
+        } else {
+            break;
+        }
+    }
+
+    let n = deltas.len();
+    if n < 2 {
+        return (0.0, 0.0, n);
+    }
+    let mean = deltas.iter().sum::<f64>() / n as f64;
+    let var = deltas.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n as f64;
+    (mean, var.sqrt(), n)
+}
+
 /// Detect N/X alternating patterns: look at consecutive angle pairs
 /// and check if they alternate between two values (±tolerance).
 fn detect_nx_pattern<'a>(
@@ -207,6 +239,17 @@ impl AimRxEvaluator {
     const STREAM_DIST_EXEMPT: f64 = 170.0; // >= this spacing: exempt (real jumps)
     const STREAM_MAX_NERF: f64 = 0.55; // up to 55% strain removed on the worst streams
 
+    // ── Stream-signature tech-buff gate (CC V3) ─────────────────────
+    // A "stream signature" is a consistent, fast 1/4 RHYTHM — regardless of
+    // spatial spacing. Spaced streams (similar patterns but spaced) have the
+    // same even rhythm as a normal stream but larger jumps, which creates
+    // velocity variety and can otherwise trip the tech buff. Under Relax that's
+    // still just a stream, so the tech buff must NOT apply. Detection is purely
+    // rhythmic: short mean gap (fast) + low gap-time variance (even rhythm).
+    const STREAM_SIG_BPM_MIN: f64 = 180.0; // mean 1/4 BPM at/above which it's "fast"
+    const STREAM_SIG_CV_MAX: f64 = 0.18; // gap-time coeff. of variation below which it's "even"
+    const STREAM_SIG_MIN_NOTES: usize = 5; // need a real run, not 2-3 notes
+
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
     const FOLLOW_POINT_DISTANCE: f64 = 112.0;
@@ -239,6 +282,22 @@ impl AimRxEvaluator {
         (30.0, 50.0),
         (10.0, 30.0),
     ];
+
+    /// True when recent objects form a stream signature: a consistent, fast
+    /// 1/4 rhythm. Spacing is intentionally ignored, so spaced streams count.
+    fn is_stream_pattern<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+    ) -> bool {
+        let (delta_mean, delta_stddev, n) =
+            windowed_delta_stats(curr, diff_objects, ANGLE_WINDOW);
+        if n < Self::STREAM_SIG_MIN_NOTES || delta_mean <= 0.0 {
+            return false;
+        }
+        let eff_bpm = milliseconds_to_bpm(delta_mean, None);
+        let cv = delta_stddev / delta_mean;
+        eff_bpm >= Self::STREAM_SIG_BPM_MIN && cv <= Self::STREAM_SIG_CV_MAX
+    }
 
     fn is_neutral_flow_pattern<'a>(
         curr: &'a OsuDifficultyObject<'a>,
@@ -697,7 +756,8 @@ impl AimRxEvaluator {
 
             // Delayed tech buff after farm + neutral pattern protection + overall cap
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
-                && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects);
+                && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects)
+                && !Self::is_stream_pattern(osu_curr_obj, diff_objects);
 
             if apply_tech {
                 aim_strain *= (1.0 + tech_boost).min(Self::TECH_OVERALL_CAP);
