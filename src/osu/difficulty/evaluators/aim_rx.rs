@@ -191,6 +191,22 @@ impl AimRxEvaluator {
 
     const AKAT_CALIBRATION: f64 = 0.92;
 
+    // ── Stream-density nerf (CC V3) ─────────────────────────────────
+    // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
+    // maps (high-BPM symphonic/speedcore streams) are pure tapping in vanilla
+    // but become huge "aim" pp under RX where the tapping is free. The nerf
+    // keys off effective stream BPM (from adjusted_delta_time) and spacing
+    // (lazy_jump_dist): a note only counts as farm-stream when it is BOTH fast
+    // AND tightly spaced, so genuine jump/flow aim (large spacing) is untouched.
+    //
+    // ramp from no nerf at STREAM_BPM_MIN up to full at STREAM_BPM_MAX, gated
+    // by a spacing window that fades the nerf out once notes are jump-spaced.
+    const STREAM_BPM_MIN: f64 = 200.0; // below this eff-BPM: no stream nerf
+    const STREAM_BPM_MAX: f64 = 280.0; // at/above this: full BPM weight
+    const STREAM_DIST_FULL: f64 = 80.0; // <= this spacing (px): full nerf weight
+    const STREAM_DIST_EXEMPT: f64 = 170.0; // >= this spacing: exempt (real jumps)
+    const STREAM_MAX_NERF: f64 = 0.55; // up to 55% strain removed on the worst streams
+
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
     const FOLLOW_POINT_DISTANCE: f64 = 112.0;
@@ -685,6 +701,22 @@ impl AimRxEvaluator {
 
             if apply_tech {
                 aim_strain *= (1.0 + tech_boost).min(Self::TECH_OVERALL_CAP);
+            }
+        }
+
+        // ── Stream-density nerf ─────────────────────────────────────
+        // Fast + tightly-spaced => farm stream under RX. Both conditions
+        // required, so jump-spaced aim at the same BPM is unaffected.
+        if osu_curr_obj.adjusted_delta_time > 0.0 {
+            let eff_bpm = milliseconds_to_bpm(osu_curr_obj.adjusted_delta_time, None);
+            let bpm_weight = reverse_lerp(eff_bpm, Self::STREAM_BPM_MIN, Self::STREAM_BPM_MAX);
+            if bpm_weight > 0.0 {
+                // 1.0 at/under STREAM_DIST_FULL, fading to 0.0 at STREAM_DIST_EXEMPT.
+                let dist = osu_curr_obj.lazy_jump_dist;
+                let dist_weight = 1.0
+                    - reverse_lerp(dist, Self::STREAM_DIST_FULL, Self::STREAM_DIST_EXEMPT);
+                let stream_severity = bpm_weight * dist_weight;
+                aim_strain *= 1.0 - Self::STREAM_MAX_NERF * stream_severity;
             }
         }
 
