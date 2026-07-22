@@ -53,7 +53,7 @@ impl OsuRatingCalculator<'_> {
         }
 
         if self.mods.nf() {
-            aim_rating *= 0.7
+            aim_rating *= 1.0
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {
@@ -139,7 +139,7 @@ impl OsuRatingCalculator<'_> {
 
         // Note: currently nf speed rating is way less nerfed than intended due to the HDHR bug
         if self.mods.nf() {
-            speed_rating *= 0.7;
+            speed_rating *= 1.0;
         }
         
         // Compensate for HDHR being disproportinately overweight (temporary until fix)
@@ -215,7 +215,7 @@ impl OsuRatingCalculator<'_> {
         } // Again ----------> ESSENTIALLY <----------- trivial flashlight will always be hard
 
         if self.mods.nf() {
-            flashlight_rating *= 0.1; // Giving high fl rating for nf doesn't make sense since they will likely fail 
+            flashlight_rating *= 1.0; 
         }
 
         if let Some(magnetised_strength) = self.mods.attraction_strength() {

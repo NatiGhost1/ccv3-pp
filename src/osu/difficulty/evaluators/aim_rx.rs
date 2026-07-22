@@ -254,6 +254,9 @@ impl AimRxEvaluator {
 
     const FOLLOW_POINT_DISTANCE: f64 = 112.0;
     const FARM_MAX_NERF: f64 = 0.35;
+    const RELAX_REPEAT_NERF_CS_START: f64 = 3.9;
+    const RELAX_REPEAT_NERF_CS_END: f64 = 6.7;
+    const RELAX_REPEAT_NERF_EXPONENT: f64 = 9.0;
     const CONSTANT_DIST_RATIO: f64 = 0.18;
     const EDGE_TO_EDGE_THRESHOLD: f64 = 360.0;
     const CONSTANT_DIST_BPM_STRAIN_TIME: f64 = 85.7;
@@ -297,6 +300,18 @@ impl AimRxEvaluator {
         let eff_bpm = milliseconds_to_bpm(delta_mean, None);
         let cv = delta_stddev / delta_mean;
         eff_bpm >= Self::STREAM_SIG_BPM_MIN && cv <= Self::STREAM_SIG_CV_MAX
+    }
+
+    fn relax_repeat_nerf_cs_factor(circle_size: f64) -> f64 {
+        if circle_size <= Self::RELAX_REPEAT_NERF_CS_START {
+            return 1.0;
+        }
+
+        let ratio = ((circle_size - Self::RELAX_REPEAT_NERF_CS_START)
+            / (Self::RELAX_REPEAT_NERF_CS_END - Self::RELAX_REPEAT_NERF_CS_START))
+            .clamp(0.0, 1.0);
+
+        f64::exp(-Self::RELAX_REPEAT_NERF_EXPONENT * ratio)
     }
 
     fn is_neutral_flow_pattern<'a>(
@@ -746,6 +761,7 @@ impl AimRxEvaluator {
 
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
+        let farm_nerf = farm_nerf * Self::relax_repeat_nerf_cs_factor(osu_curr_obj.circle_size);
 
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 

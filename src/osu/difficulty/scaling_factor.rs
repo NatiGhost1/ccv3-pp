@@ -15,6 +15,7 @@ pub struct ScalingFactor {
     pub factor: f32,
     pub radius: f64,
     pub scale: f32,
+    pub cs: f64,
 }
 
 impl ScalingFactor {
@@ -32,6 +33,7 @@ impl ScalingFactor {
             factor,
             radius,
             scale,
+            cs: f64::from(cs),
         }
     }
 

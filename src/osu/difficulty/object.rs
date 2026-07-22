@@ -26,6 +26,7 @@ pub struct OsuDifficultyObject<'a> {
     pub lazy_travel_time: f64,
     pub angle: Option<f64>,
 
+    pub circle_size: f64,
     pub small_circle_bonus: f64,
 }
 
@@ -67,6 +68,7 @@ impl<'a> OsuDifficultyObject<'a> {
             lazy_travel_dist: 0.0,
             lazy_travel_time: 0.0,
             angle: None,
+            circle_size: scaling_factor.cs,
             small_circle_bonus,
         };
 
