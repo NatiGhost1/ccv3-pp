@@ -254,8 +254,8 @@ impl AimRxEvaluator {
 
     const FOLLOW_POINT_DISTANCE: f64 = 112.0;
     const FARM_MAX_NERF: f64 = 0.35;
-    const RELAX_REPEAT_NERF_CS_START: f64 = 3.9;
-    const RELAX_REPEAT_NERF_CS_END: f64 = 6.7;
+    const RELAX_REPEAT_NERF_RADIUS_START: f64 = 36.9;
+    const RELAX_REPEAT_NERF_RADIUS_END: f64 = 24.4;
     const RELAX_REPEAT_NERF_EXPONENT: f64 = 9.0;
     const CONSTANT_DIST_RATIO: f64 = 0.18;
     const EDGE_TO_EDGE_THRESHOLD: f64 = 360.0;
@@ -302,13 +302,13 @@ impl AimRxEvaluator {
         eff_bpm >= Self::STREAM_SIG_BPM_MIN && cv <= Self::STREAM_SIG_CV_MAX
     }
 
-    fn relax_repeat_nerf_cs_factor(circle_size: f64) -> f64 {
-        if circle_size <= Self::RELAX_REPEAT_NERF_CS_START {
+    fn relax_repeat_nerf_radius_factor(circle_radius: f64) -> f64 {
+        if circle_radius >= Self::RELAX_REPEAT_NERF_RADIUS_START {
             return 1.0;
         }
 
-        let ratio = ((circle_size - Self::RELAX_REPEAT_NERF_CS_START)
-            / (Self::RELAX_REPEAT_NERF_CS_END - Self::RELAX_REPEAT_NERF_CS_START))
+        let ratio = ((Self::RELAX_REPEAT_NERF_RADIUS_START - circle_radius)
+            / (Self::RELAX_REPEAT_NERF_RADIUS_START - Self::RELAX_REPEAT_NERF_RADIUS_END))
             .clamp(0.0, 1.0);
 
         f64::exp(-Self::RELAX_REPEAT_NERF_EXPONENT * ratio)
@@ -761,7 +761,7 @@ impl AimRxEvaluator {
 
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
-        let farm_nerf = farm_nerf * Self::relax_repeat_nerf_cs_factor(osu_curr_obj.circle_size);
+        let farm_nerf = farm_nerf * Self::relax_repeat_nerf_radius_factor(osu_curr_obj.circle_radius);
 
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
