@@ -110,6 +110,19 @@ pub(crate) fn rx_strain_weighted_misses(
                 MID_MULT
             }
         };
+        // Apply a small late-map boost so misses near the end still matter.
+        // Boost scales from 0 at 70% into the map up to `late_multiplier`
+        // at the very end. This helps avoid misses near the map end
+        // being effectively ignored.
+        let late_multiplier: f64 = 0.35; // tuning: max +35% penalty at map end
+        let pos = if chunks_n > 1 {
+            idx as f64 / (chunks_n as f64 - 1.0)
+        } else {
+            0.0
+        };
+        let late_boost = ((pos - 0.70) / 0.30).clamp(0.0, 1.0);
+        let mult = mult * (1.0 + late_boost * late_multiplier);
+
         weighted += mult;
     }
 
