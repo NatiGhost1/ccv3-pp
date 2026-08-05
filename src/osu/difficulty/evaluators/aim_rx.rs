@@ -215,13 +215,13 @@ fn detect_nx_pattern<'a>(
 
 impl AimRxEvaluator {
     // Recalibrated constants to produce akat-equivalent pp output.
-    const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
-    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
-    const SLIDER_MULTIPLIER: f64 = 1.16;
-    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
+    const WIDE_ANGLE_MULTIPLIER: f64 = 1.63;
+    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.86;
+    const SLIDER_MULTIPLIER: f64 = 1.03;
+    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.75;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
-    const AKAT_CALIBRATION: f64 = 1.05; // 0.92 but im testing what happens rn
+    const AKAT_CALIBRATION: f64 = 0.92; // 0.92 but im testing what happens rn
 
     // ── Stream-density nerf (CC V3) ─────────────────────────────────
     // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
