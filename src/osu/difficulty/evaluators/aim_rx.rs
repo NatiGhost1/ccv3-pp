@@ -215,10 +215,10 @@ fn detect_nx_pattern<'a>(
 
 impl AimRxEvaluator {
     // Recalibrated constants to produce akat-equivalent pp output.
-    const WIDE_ANGLE_MULTIPLIER: f64 = 1.63;
-    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.86;
+    const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
+    const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
     const SLIDER_MULTIPLIER: f64 = 1.03;
-    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.75;
+    const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
     const AKAT_CALIBRATION: f64 = 0.92; // 0.92 but im testing what happens rn
@@ -766,9 +766,9 @@ impl AimRxEvaluator {
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
         if flow_active {
-            aim_strain *= 1.0 - flow_nerf;
+            aim_strain *= 0.95 - flow_nerf; // testing 
         } else {
-            aim_strain *= 1.0 - farm_nerf;
+            aim_strain *= 1.15 - farm_nerf; // testing what happens if i raise this (since farm nerf so strong)
 
             // Delayed tech buff after farm + neutral pattern protection + overall cap
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
