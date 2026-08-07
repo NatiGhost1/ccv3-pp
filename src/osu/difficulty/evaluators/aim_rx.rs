@@ -766,9 +766,9 @@ impl AimRxEvaluator {
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
         if flow_active {
-            aim_strain *= 0.95 - flow_nerf; // testing 
+            aim_strain *= 0.95 - flow_nerf;
         } else {
-            aim_strain *= 1.15 - farm_nerf; // testing what happens if i raise this (since farm nerf so strong)
+            aim_strain *= 1.15 - farm_nerf;
 
             // Delayed tech buff after farm + neutral pattern protection + overall cap
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
