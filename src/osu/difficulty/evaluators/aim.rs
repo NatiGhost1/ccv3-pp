@@ -365,7 +365,7 @@ impl AimEvaluator {
                 let bpm_fade = 1.0 - ((eff_bpm - 300.0) / 200.0).clamp(0.0, 1.0);
 
                 let nx_severity = nx_strength * dist_consistency * bpm_fade;
-                aim_strain *= 1.1 - Self::NX_MAX_NERF_VANILLA * nx_severity;
+                aim_strain *= 1.0 - Self::NX_MAX_NERF_VANILLA * nx_severity;
             }
         }
 
@@ -405,7 +405,7 @@ impl AimEvaluator {
             }
         }
 
-        aim_strain *= 1.07 - slop_nerf;
+        aim_strain *= 1.0 - slop_nerf;
 
         // ── CC V3: akat calibration ─────────────────────────────────
         aim_strain *= Self::AKAT_CALIBRATION;
