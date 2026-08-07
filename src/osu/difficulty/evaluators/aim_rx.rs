@@ -792,7 +792,7 @@ impl AimRxEvaluator {
                 let dist_weight = 1.0
                     - reverse_lerp(dist, Self::STREAM_DIST_FULL, Self::STREAM_DIST_EXEMPT);
                 let stream_severity = bpm_weight * dist_weight;
-                aim_strain *= 1.0 - Self::STREAM_MAX_NERF * stream_severity;
+                aim_strain *= 0.92 - Self::STREAM_MAX_NERF * stream_severity;
             }
         }
 
