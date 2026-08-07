@@ -1,4 +1,4 @@
-// CC V3: Relax-specific aim evaluator for rosu-pp.
+// CC V3: Relax-specific aim evaluator.
 //
 // Purpose:
 //   * N/X pattern detection — detects alternating zigzag and crossover patterns
