@@ -197,6 +197,7 @@ impl DifficultyValues {
         // Strain peaks for local_sr_per_minute (marathon decay)
         let aim_peaks: Vec<f64> = skills.aim.clone().into_current_strain_peaks();
         let speed_peaks: Vec<f64> = skills.speed.clone().into_current_strain_peaks();
+        let flashlight_peaks: Vec<f64> = skills.flashlight.clone().into_current_strain_peaks();
 
         // Compute dominant_tap_bpm
         if !object_strains.is_empty() && !speed_object_data.is_empty() {
@@ -214,6 +215,8 @@ impl DifficultyValues {
         attrs.local_sr_per_minute = crate::osu::performance::relax_marathon::local_sr_per_minute(
             &aim_peaks,
             &speed_peaks,
+            &flashlight_peaks,
+            0.0,
         );
 
         // Compute AP-only speed/rhythm local SR for autopilot marathon decay.
@@ -303,6 +306,7 @@ impl DifficultyValues {
             aim_no_sliders,
             speed,
             flashlight,
+            memory,
         } = skills;
 
         let aim_difficulty_value = aim.cloned_difficulty_value();
@@ -363,6 +367,8 @@ impl DifficultyValues {
         } else {
             0.0
         };
+
+        attrs.memory = memory.clone().difficulty();
 
         let base_aim_performance = Aim::difficulty_to_performance(aim_rating);
         let base_speed_performance = Speed::difficulty_to_performance(speed_rating);

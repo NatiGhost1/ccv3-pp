@@ -6,7 +6,7 @@ use crate::{
         OsuDifficultyAttributes, OsuPerformanceAttributes, OsuScoreState,
         difficulty::{
             rating::OsuRatingCalculator,
-            skills::{aim::Aim, flashlight::Flashlight, speed::Speed, strain::OsuStrainSkill},
+            skills::{aim::Aim, flashlight::Flashlight, memory::Memory, speed::Speed, strain::OsuStrainSkill},
         },
         legacy_score_miss_calc::OsuLegacyScoreMissCalculator,
     },
@@ -348,11 +348,18 @@ impl OsuPerformanceCalculator<'_> {
         effective_miss_count: f64,
         aim_estimated_slider_breaks: &mut f64,
     ) -> f64 {
-        if self.mods.ap() {
-            return 0.0;
-        }
-
         let mut aim_difficulty = self.attrs.aim;
+
+        if self.mods.ap() && self.mods.fl() {
+            let jump_factor = ((self.attrs.avg_jump_dist - 80.0) / 120.0).clamp(0.0, 1.0);
+            let bpm = if self.attrs.median_delta_time > 0.0 {
+                15_000.0 / self.attrs.median_delta_time
+            } else {
+                0.0
+            };
+            let bpm_factor = ((bpm - 180.0) / 100.0).clamp(0.0, 1.0);
+            aim_difficulty *= 0.20 + 0.80 * jump_factor * bpm_factor;
+        }
 
         if self.attrs.n_sliders > 0 && self.attrs.aim_difficult_slider_count > 0.0 {
             let estimate_improperly_followed_difficult_sliders = if self.using_classic_slider_acc {
@@ -582,6 +589,15 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         let mut flashlight_value = Flashlight::difficulty_to_performance(self.attrs.flashlight);
+        let memory_value = Memory::performance_value(
+            self.attrs.memory,
+            self.acc,
+            f64::from(self.state.max_combo),
+            f64::from(self.attrs.max_combo),
+            effective_miss_count,
+            self.total_hits(),
+        );
+        flashlight_value = (flashlight_value.powf(1.1) + memory_value.powf(1.1)).powf(1.0 / 1.1);
 
         let total_hits = self.total_hits();
 

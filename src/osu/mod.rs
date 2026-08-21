@@ -13,6 +13,7 @@ pub use self::{
     attributes::{OsuDifficultyAttributes, OsuPerformanceAttributes},
     difficulty::gradual::OsuGradualDifficulty,
     performance::{InspectOsuPerformance, OsuPerformance, gradual::OsuGradualPerformance},
+    performance::relax_marathon::weighted_star_rating,
     score_state::{OsuHitResults, OsuScoreOrigin, OsuScoreState},
     strains::OsuStrains,
 };

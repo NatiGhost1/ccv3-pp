@@ -9,6 +9,7 @@ use crate::{
 };
 
 define_skill! {
+    #[derive(Clone)]
     pub struct Flashlight: StrainSkill => [OsuDifficultyObject<'a>][OsuDifficultyObject<'a>] {
         current_strain: f64,
         has_hidden_mod: bool,
