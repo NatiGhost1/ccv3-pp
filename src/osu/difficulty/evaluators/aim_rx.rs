@@ -212,7 +212,7 @@ impl AimRxEvaluator {
     const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
 
-    const AKAT_CALIBRATION: f64 = 0.92; // 0.92 but im testing what happens rn
+    const AIM_CALIBRATION: f64 = 0.92;
 
     // ── Stream-density nerf (CC V3) ─────────────────────────────────
     // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
@@ -788,7 +788,7 @@ impl AimRxEvaluator {
         }
 
         // ── Akat calibration ────────────────────────────────────────
-        aim_strain *= Self::AKAT_CALIBRATION;
+        aim_strain *= Self::AIM_CALIBRATION;
 
         aim_strain
     }
