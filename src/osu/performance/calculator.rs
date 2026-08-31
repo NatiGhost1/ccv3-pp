@@ -289,36 +289,6 @@ impl OsuPerformanceCalculator<'_> {
             flashlight_value *= nf_mult;
         }
 
-        // CCV3 targeted PP-layer nerfs
-
-        // OD < 9 accuracy nerf
-        if self.attrs.od() < 9.0 && !self.mods.rx() {
-            let below = (9.0 - self.attrs.od()).min(3.0);
-            let od_nerf = 1.0 - 0.073 * below;
-            acc_value *= od_nerf;
-        }
-
-        // AR 10.1-10.5 band nerf
-        if self.attrs.ar > 10.1 && self.attrs.ar <= 10.5 && !self.mods.rx() {
-            let mid = 10.3;
-            let half = 0.2;
-            let t = 1.0 - ((self.attrs.ar - mid).abs() / half).min(1.0);
-            aim_value *= 1.0 - 0.06 * t;
-        }
-
-        // CS + mid-BPM 1/2 nerf
-        if self.attrs.median_delta_time > 0.0 {
-            let md = self.attrs.median_delta_time;
-            let in_band = md >= 176.0 && md <= 250.0;
-            let cs = self.attrs.cs;
-            if in_band && cs >= 4.6 && cs <= 6.4 {
-                let cs_t = 1.0 - ((cs - 5.5).abs() / 0.9).min(1.0);
-                let bpm_1_2 = 30_000.0 / md;
-                let bpm_t = 1.0 - ((bpm_1_2 - 145.0).abs() / 25.0).min(1.0);
-                aim_value *= 1.0 - 0.10 * cs_t * bpm_t;
-            }
-        }
-
         // Recompute final pp with all nerfs
         pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
@@ -557,7 +527,6 @@ impl OsuPerformanceCalculator<'_> {
             .powf(0.3)
             .min(1.15);
 
-        // DO NOT EVER TOUCH THIS AGAIN UNDER ANY SCENARIO SO HELP ME GOD IF THIS GETS OUT OF HAND ON EXTREME MAPS I WILL PERSONALLY COME AFTER YOU AND UNPLUG YOU. I SWEAR TO GOD. I DONT CARE IF THIS GETS OUT OF HAND ON EXTREME MAPS, THIS IS THE FINAL FORMULA AND I WILL NOT CHANGE IT. CLAUDE KEEP YOUR ROBOTOIC SLIMY GREASY HANDS OFF THIS FORMULA.
         if self.mods.bl() {
             acc_value *= 1.14;
         } else if self.mods.hd() || self.mods.tc() {
