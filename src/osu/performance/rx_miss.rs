@@ -25,14 +25,13 @@
 //     dropping fast. If acc IS dropping fast AND there are several misses, that
 //     signals a genuinely inconsistent player (not bad luck) → full value.
 //
-// n100 / n50 inflation
-// --------------------
-// Oks and Mehs inflate the effective miss count, each worth a fraction of a
-// real miss (N100_PER, N50_PER). The count that may contribute is hard-capped
-// (N100_CAP = 12, N50_CAP = 7); on top of that a variance-aware soft stop
-// tapers the contribution once the 50:100 ratio climbs past VARI_RATIO (the
-// mix stops looking like "a few slipped edges" and starts looking like a
-// uniformly low-acc play). See `count_inflation`.
+// n100 / n50 inflation (OD-scaled)
+// --------------------------------
+// Oks (n100) and Mehs (n50) inflate the effective miss count based on the map's
+// Overall Difficulty (OD, passed from `self.attrs.od()`). High OD maps scale
+// n50 penalties aggressively (cubic growth), making n50s at OD 10–11+ hit hard,
+// while n100s scale milder (linear growth) to ensure pp is still lost without
+// over-penalizing standard off-keying.
 
 const HIGH_FRAC: f64 = 0.70;
 const LOW_FRAC: f64 = 0.30;
@@ -44,8 +43,6 @@ const LOW_UNLUCKY_MULT: f64 = 0.40;
 const LOW_UNLUCKY_MAX_MISSES: u32 = 1;
 const LOW_ACC_OK: f64 = 0.97;
 
-const N100_PER: f64 = 1.0 / 6.0;
-const N50_PER: f64 = 1.0 / 3.0;
 const N100_CAP: u32 = 12;
 const N50_CAP: u32 = 7;
 const VARI_RATIO: f64 = 0.50;
@@ -53,6 +50,8 @@ const VARI_RATIO: f64 = 0.50;
 /// Strain-weighted effective miss count for a relax score. This REPLACES the
 /// literal miss count that feeds the main aim miss-penalty. Always >= 0.
 /// On a clean FC with no Oks/Mehs this returns 0.0.
+///
+/// Pass `self.attrs.od()` into the `od` parameter when calling this function.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rx_strain_weighted_misses(
     chunk_hardness: &[f64],
@@ -60,8 +59,9 @@ pub(crate) fn rx_strain_weighted_misses(
     n100: u32,
     n50: u32,
     misses: u32,
+    od: f64,
 ) -> f64 {
-    let count_infl = count_inflation(n100, n50);
+    let count_infl = count_inflation(n100, n50, od);
 
     if misses == 0 {
         return count_infl;
@@ -129,14 +129,23 @@ pub(crate) fn rx_strain_weighted_misses(
     weighted + count_infl
 }
 
-/// n100/n50 -> effective-miss inflation with hard caps and a variance-aware
-/// soft stop. Returns an additive effective-miss contribution (>= 0).
-fn count_inflation(n100: u32, n50: u32) -> f64 {
+/// n100/n50 -> effective-miss inflation with hard caps, a variance-aware
+/// soft stop, and OD-scaled severity.
+fn count_inflation(n100: u32, n50: u32, od: f64) -> f64 {
     if n100 == 0 && n50 == 0 {
         return 0.0;
     }
     let c100 = n100.min(N100_CAP);
     let c50 = n50.min(N50_CAP);
+
+    // Dynamic OD factor centered around OD 10.
+    let od_factor = (od / 10.0).max(0.0);
+
+    // Linear scaling for 100s: milder effect, guarantees pp loss at high OD (~0.15 misses/100 at OD 10).
+    let n100_per = 0.05 + 0.10 * od_factor;
+
+    // Cubic scaling for 50s: heavy penalty at high OD (~0.40 misses/50 at OD 10, ~0.50 at OD 11).
+    let n50_per = 0.10 + 0.30 * od_factor.powi(3);
 
     let ratio = if c100 > 0 {
         f64::from(c50) / f64::from(c100)
@@ -149,5 +158,5 @@ fn count_inflation(n100: u32, n50: u32) -> f64 {
         (1.0 - 0.5 * ((ratio - VARI_RATIO) / VARI_RATIO).min(1.0)).max(0.5)
     };
 
-    (f64::from(c100) * N100_PER + f64::from(c50) * N50_PER) * damp
+    (f64::from(c100) * n100_per + f64::from(c50) * n50_per) * damp
 }
