@@ -12,17 +12,8 @@
 //   * Delayed tech buff — avoids immediate tech application right after farm
 //     sections to prevent disproportionate strain from isolated anomalies.
 //   * Tech boost overall cap — limits maximum positive adjustment.
-//   * Akat calibration — scales output to approximately match ccv3-pp-rs
-//     despite rosu's higher SKILL_MULTIPLIER and wider angle bonus shapes.
-//
-// Akat calibration details:
-//   Derivation: akat_rx / akat_vanilla × rosu_vanilla × (25.18/26.0)
-//     Wide:  1.56/1.45 × 1.5 × 0.968 = 1.56
-//     Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
-//     Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
-//     VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
-//   Final AKAT_CALIBRATION (0.92) accounts for cumulative angle shape
-//   differences (smoothstep broader than sin²) + SKILL_MULTIPLIER gap.
+//   * Aim calibration — Calibrates aim values to reflect true skill,
+//     compensating for ccv3-pp evaluation bias.
 //
 // Uses rosu's formula base (smoothstep/smootherstep, adjusted_delta_time,
 // wiggle_bonus, small_circle_bonus, DIAMETER-based gating).
