@@ -21,6 +21,43 @@ pub struct Reading {
     current_section_end: f64,
 }
 
+fn repetition_pressure(deltas: &[f64], jumps: &[f64]) -> f64 {
+    if deltas.is_empty() || jumps.is_empty() {
+        return 0.0;
+    }
+
+    let average_delta = deltas.iter().copied().sum::<f64>() / deltas.len() as f64;
+    let average_jump = jumps.iter().copied().sum::<f64>() / jumps.len() as f64;
+
+    let delta_variation = deltas
+        .iter()
+        .map(|delta| (*delta - average_delta).abs())
+        .sum::<f64>()
+        / deltas.len() as f64;
+    let jump_variation = jumps
+        .iter()
+        .map(|jump| (*jump - average_jump).abs())
+        .sum::<f64>()
+        / jumps.len() as f64;
+
+    let delta_stability = 1.0
+        - (delta_variation / average_delta.clamp(1.0, f64::INFINITY)).clamp(0.0, 1.0);
+    let jump_stability = 1.0
+        - (jump_variation / average_jump.clamp(1.0, f64::INFINITY)).clamp(0.0, 1.0);
+
+    let alternating = if deltas.len() > 1 {
+        let alternation_count = deltas
+            .windows(2)
+            .filter(|pair| (pair[0] - pair[1]).abs() > average_delta * 0.08)
+            .count() as f64;
+        (alternation_count / (deltas.len() - 1) as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    ((0.65 * delta_stability + 0.35 * jump_stability) * (0.55 + 0.45 * alternating)).clamp(0.0, 1.0)
+}
+
 impl Reading {
     pub fn new(enabled: bool, easy: bool, approach_rate: f64, hidden: bool) -> Self {
         Self {
@@ -73,6 +110,10 @@ impl Reading {
     ) -> f64 {
         let delta_time = curr.delta_time.max(1.0);
         let density = (1000.0 / delta_time).clamp(0.0, 30.0);
+        let bpm = 60_000.0 / delta_time;
+        let slow_map = bpm < 200.0;
+        let ar = approach_rate.clamp(0.0, 10.0);
+        let map_length_factor = (objects.len() as f64 / 300.0).clamp(0.0, 2.2);
 
         let mut pattern_pressure = 0.0;
 
@@ -92,15 +133,80 @@ impl Reading {
                 + angle_pressure * 0.9;
         }
 
-        let ar_hardness = (8.0 - approach_rate.clamp(0.0, 10.0)).clamp(0.0, 8.0) / 8.0;
-        let memory_blend = (1.0 - (approach_rate / 7.0).clamp(0.0, 1.0)).powi(2);
-        let density_pressure = density * (0.35 + 0.65 * ar_hardness);
-        let pattern_factor = pattern_pressure * (0.9 + 0.8 * memory_blend);
+        // Higher ARs are easier to read, especially on slower maps where the timing window is not as punishing.
+        let high_ar_nerf = if ar >= 8.5 {
+            let peak = ((ar - 8.5) / 1.5).clamp(0.0, 1.0);
+            let slow_map_bonus = if slow_map { 1.0 } else { 0.7 };
+            (1.0 - 0.55 * peak) * slow_map_bonus
+        } else {
+            1.0
+        };
 
-        let mut readability = (density_pressure + pattern_factor) * (1.0 + memory_blend * 0.7);
+        // Low AR memory is dominated by map length and pattern retention, not raw BPM.
+        // Faster maps still get a bit more exposure, but length is the main driver.
+        let low_ar_memory = if !hidden && ar < 2.0 {
+            let low_ar_factor = (2.0 - ar) / 2.0;
+            let speed_pressure = (bpm / 200.0).clamp(0.0, 1.0) * 0.25;
+            low_ar_factor * (map_length_factor + 0.3 + speed_pressure)
+        } else {
+            0.0
+        };
+
+        let memory_blend = (low_ar_memory.clamp(0.0, 2.5) / 2.5).powi(2);
+
+        // Keep the easier end of the AR curve from being overstated on 200 BPM and below maps.
+        let ar_hardness = if ar < 2.0 {
+            let low_ar_factor = (2.0 - ar) / 2.0;
+            0.6 * low_ar_factor * if slow_map { 0.2 } else { 1.0 }
+        } else if ar >= 8.5 {
+            let peak = ((ar - 8.5) / 1.5).clamp(0.0, 1.0);
+            let base = 1.0 - peak;
+            if slow_map {
+                0.25 * base
+            } else {
+                0.45 * base
+            }
+        } else {
+            0.65 + 0.15 * (ar / 8.5)
+        };
+
+        let density_pressure = density * (0.18 + 0.72 * ar_hardness);
+        let pattern_factor = pattern_pressure * (0.75 + 0.9 * memory_blend + 0.45 * ar_hardness);
+
+        let local_repeat_pressure = {
+            let lookback = (curr.idx.saturating_sub(8)).min(objects.len().saturating_sub(1));
+            let recent_deltas: Vec<f64> = (0..=lookback)
+                .filter_map(|offset| {
+                    let obj = objects.get(curr.idx.saturating_sub(offset))?;
+                    if obj.idx == curr.idx {
+                        return None;
+                    }
+                    Some(obj.delta_time.max(1.0) as f64)
+                })
+                .collect();
+            let recent_jumps: Vec<f64> = (0..=lookback)
+                .filter_map(|offset| {
+                    let obj = objects.get(curr.idx.saturating_sub(offset))?;
+                    if obj.idx == curr.idx {
+                        return None;
+                    }
+                    let prev = objects.get(curr.idx.saturating_sub(offset.saturating_add(1)))?;
+                    let jump = f64::from((obj.base.stacked_pos() - prev.base.stacked_pos()).length());
+                    Some(jump)
+                })
+                .collect();
+
+            repetition_pressure(&recent_deltas, &recent_jumps)
+        };
+
+        let mut readability = (density_pressure + pattern_factor)
+            * (1.0 + 0.65 * memory_blend)
+            * high_ar_nerf;
+
+        readability *= 1.0 - (local_repeat_pressure * 0.9);
 
         if hidden {
-            readability *= 1.12;
+            readability *= 1.08;
         }
 
         readability / 6.0
@@ -199,3 +305,37 @@ impl StrainSkill for Reading {
 }
 
 impl OsuStrainSkill for Reading {}
+
+#[cfg(test)]
+mod tests {
+    use rosu_map::section::general::GameMode;
+
+    use crate::{Beatmap, Difficulty, osu::Osu};
+
+    #[test]
+    fn repetitive_1_2_patterns_have_low_reading_pressure() {
+        let deltas = [180.0, 120.0, 180.0, 120.0, 180.0, 120.0, 180.0, 120.0];
+        let jumps = [60.0, 80.0, 60.0, 80.0, 60.0, 80.0, 60.0, 80.0];
+
+        let suppression = super::repetition_pressure(&deltas, &jumps);
+        assert!(suppression > 0.7, "repeating 1-2 patterns should be heavily suppressed");
+    }
+
+    #[test]
+    fn reading_skill_tracks_map_ar() {
+        let map = Beatmap::from_path("./resources/nati-1.osu").unwrap();
+        assert_eq!(map.mode, GameMode::Osu);
+
+        let low_ar = Difficulty::new()
+            .ar(5.0, false)
+            .calculate_for_mode::<Osu>(&map)
+            .unwrap();
+        let high_ar = Difficulty::new()
+            .ar(9.8, false)
+            .calculate_for_mode::<Osu>(&map)
+            .unwrap();
+
+        assert_ne!(low_ar.reading, high_ar.reading);
+        assert!(low_ar.reading > high_ar.reading, "low AR should be harder to read than high AR");
+    }
+}
