@@ -13,6 +13,8 @@ pub struct OsuDifficultyAttributes {
     pub flashlight: f64,
     /// CC V3: Flashlight memory difficulty.
     pub memory: f64,
+    /// The difficulty of the reading skill.
+    pub reading: f64,
     /// The ratio of the aim strain with and without considering sliders
     pub slider_factor: f64,
     /// Describes how much of aim's difficult strain count is contributed to by sliders

@@ -56,10 +56,10 @@ impl Speed {
         );
         let mut rhythm_eval = RhythmEvaluator::evaluate_diff_of(curr, objects, self.hit_window);
 
-        // Applies a 50% buff to both speed and rhythm evaluations when Autopilot is enabled
+        // Applies a 25% buff to both speed and rhythm evaluations when Autopilot is enabled
         if self.has_autopilot_mod {
-            speed_eval *= 1.5;
-            rhythm_eval *= 1.5;
+            speed_eval *= 1.25;
+            rhythm_eval *= 1.25;
         }
 
         self.current_strain += speed_eval * Self::SKILL_MULTIPLIER;

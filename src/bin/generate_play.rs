@@ -373,6 +373,7 @@ fn main() {
 
     println!("Beatmap: {}", map_path.display());
     println!("Mode: {:?}", map.mode);
+    println!("AR: {:.2}", map.ar);
     println!("BPM: {:.2}", map.bpm());
     println!("Total hitobjects: {}", map.hit_objects.len());
     println!("Seed: {seed}");
@@ -463,14 +464,15 @@ fn main() {
             .hitresult_generator::<Composable<Closest, Closest, Closest, Closest>>()
             .calculate();
 
-        let (pp_aim, pp_speed, pp_acc, pp_flashlight) = match &perf_attrs {
+        let (pp_aim, pp_speed, pp_acc, pp_flashlight, reading_diff) = match &perf_attrs {
             PerformanceAttributes::Osu(attrs) => (
                 attrs.pp_aim,
                 attrs.pp_speed,
                 attrs.pp_acc,
                 attrs.pp_flashlight,
+                attrs.difficulty.reading,
             ),
-            _ => (0.0, 0.0, 0.0, 0.0),
+            _ => (0.0, 0.0, 0.0, 0.0, 0.0),
         };
 
         let weighted_stars = match handling {
@@ -520,8 +522,8 @@ fn main() {
             println!("  FC: {:.2} pp", fc_attrs.pp());
             println!("  SS: {:.2} pp", ss_attrs.pp());
             println!(
-                "  Aim: {:.2}  Speed: {:.2}  Acc: {:.2}  FL: {:.2}",
-                pp_aim, pp_speed, pp_acc, pp_flashlight
+                "  Aim: {:.2}  Speed: {:.2}  Acc: {:.2}  FL: {:.2}  Read: {:.2}",
+                pp_aim, pp_speed, pp_acc, pp_flashlight, reading_diff
             );
             println!("  Combo: {combo}/{max_combo}");
             println!(
@@ -544,6 +546,7 @@ fn main() {
                 perf_attrs.stars(),
                 weighted_stars
             );
+            println!("  Reading: {:.2}", reading_diff);
             println!("  Accuracy: {:.4}%", achieved_accuracy * 100.0);
             println!("  Combo: {combo}/{max_combo}");
             println!(

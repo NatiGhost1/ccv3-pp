@@ -18,6 +18,8 @@ pub struct OsuStrains {
     pub speed: Vec<f64>,
     /// Strain peaks of the flashlight skill.
     pub flashlight: Vec<f64>,
+    /// Strain peaks of the reading skill.
+    pub reading: Vec<f64>,
 }
 
 impl OsuStrains {
@@ -37,7 +39,7 @@ pub fn strains(difficulty: &Difficulty, map: &Beatmap) -> Result<OsuStrains, Con
                 speed,
                 flashlight,
                 memory: _,
-                reading: _,
+                reading,
             },
         attrs: _,
     } = DifficultyValues::calculate(difficulty, &map);
@@ -47,5 +49,6 @@ pub fn strains(difficulty: &Difficulty, map: &Beatmap) -> Result<OsuStrains, Con
         aim_no_sliders: aim_no_sliders.into_current_strain_peaks(),
         speed: speed.into_current_strain_peaks(),
         flashlight: flashlight.into_current_strain_peaks(),
+        reading: reading.into_current_strain_peaks(),
     })
 }

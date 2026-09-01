@@ -378,6 +378,7 @@ impl DifficultyValues {
         attrs.memory = memory.clone().difficulty();
 
         let reading_difficulty = reading.cloned_difficulty_value();
+        attrs.reading = reading_difficulty;
         let reading_rating = if mods.rx() {
             0.0
         } else {
