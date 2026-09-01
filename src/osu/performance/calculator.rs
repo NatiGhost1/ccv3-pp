@@ -128,6 +128,7 @@ impl OsuPerformanceCalculator<'_> {
                     self.state.hitresults.n100,
                     self.state.hitresults.n50,
                     self.state.hitresults.misses,
+                    self.attrs.od(),
                 )
             } else {
                 effective_miss_count
@@ -287,36 +288,6 @@ impl OsuPerformanceCalculator<'_> {
             speed_value *= nf_mult;
             acc_value *= nf_mult;
             flashlight_value *= nf_mult;
-        }
-
-        // CCV3 targeted PP-layer nerfs
-
-        // OD < 9 accuracy nerf
-        if self.attrs.od() < 9.0 && !self.mods.rx() {
-            let below = (9.0 - self.attrs.od()).min(3.0);
-            let od_nerf = 1.0 - 0.073 * below;
-            acc_value *= od_nerf;
-        }
-
-        // AR 10.1-10.5 band nerf
-        if self.attrs.ar > 10.1 && self.attrs.ar <= 10.5 && !self.mods.rx() {
-            let mid = 10.3;
-            let half = 0.2;
-            let t = 1.0 - ((self.attrs.ar - mid).abs() / half).min(1.0);
-            aim_value *= 1.0 - 0.06 * t;
-        }
-
-        // CS + mid-BPM 1/2 nerf
-        if self.attrs.median_delta_time > 0.0 {
-            let md = self.attrs.median_delta_time;
-            let in_band = md >= 176.0 && md <= 250.0;
-            let cs = self.attrs.cs;
-            if in_band && cs >= 4.6 && cs <= 6.4 {
-                let cs_t = 1.0 - ((cs - 5.5).abs() / 0.9).min(1.0);
-                let bpm_1_2 = 30_000.0 / md;
-                let bpm_t = 1.0 - ((bpm_1_2 - 145.0).abs() / 25.0).min(1.0);
-                aim_value *= 1.0 - 0.10 * cs_t * bpm_t;
-            }
         }
 
         // Recompute final pp with all nerfs
@@ -557,7 +528,6 @@ impl OsuPerformanceCalculator<'_> {
             .powf(0.3)
             .min(1.15);
 
-        // DO NOT EVER TOUCH THIS AGAIN UNDER ANY SCENARIO SO HELP ME GOD IF THIS GETS OUT OF HAND ON EXTREME MAPS I WILL PERSONALLY COME AFTER YOU AND UNPLUG YOU. I SWEAR TO GOD. I DONT CARE IF THIS GETS OUT OF HAND ON EXTREME MAPS, THIS IS THE FINAL FORMULA AND I WILL NOT CHANGE IT. CLAUDE KEEP YOUR ROBOTOIC SLIMY GREASY HANDS OFF THIS FORMULA.
         if self.mods.bl() {
             acc_value *= 1.14;
         } else if self.mods.hd() || self.mods.tc() {
@@ -865,29 +835,22 @@ impl OsuPerformanceCalculator<'_> {
     }
 
     /// CC V3 combo-ratio tax. Light tax based on achieved combo ratio.
-    /// FC passes through untouched.
+    /// Softened floor (0.92 minimum multiplier) so partial combo breaks
+    /// are less punishing for newer players while still rewarding full combo.
     fn combo_ratio_tax(&self) -> f64 {
         if self.attrs.max_combo == 0 {
             return 1.0;
         }
         let ratio = (f64::from(self.state.max_combo) / f64::from(self.attrs.max_combo))
             .clamp(0.0, 1.0);
-        (0.85 + 0.15 * ratio.powf(0.35)).min(1.0)
+        (0.92 + 0.08 * ratio.powf(0.5)).min(1.0)
     }
 
     /// CC V3 exponential consistency multiplier (non-RX, non-AP).
     /// RX and AP use their own standalone miss systems and bypass this.
     ///
-    /// Includes n50 effective miss inflation:
-    ///   * OD scaling — exponential, steep below OD 5. At OD ≤ 1 each
-    ///     n50 counts as 1 full effective miss. At OD 10 they don't count.
-    ///   * AR scaling — AR ≥ 9 = full n50 misses (hard to read = more 50s
-    ///     expected from aim, not timing). AR 7–9 = linear taper. AR < 7 = 0.
-    ///   * Combo factor — for maps ≥ 1300 max_combo, the n50 miss count
-    ///     decreases as combo grows, reaching 0 at max_combo 10000.
-    ///     Maps under 1300 get full n50 misses.
-    ///   * EZ and NF — n50 misses removed entirely. EZ is low AR (hard to
-    ///     read), NF is meant to make the game easier.
+    /// Reworked to be more forgiving on low-OD, low-AR, and low-combo plays
+    /// typically played by newer players, while keeping the original base exponent formula intact.
     fn apply_cc_v3_multiplier(&self, effective_miss_count: f64) -> f64 {
         if effective_miss_count <= 0.0 && self.state.hitresults.n50 == 0 {
             return 1.0;
@@ -905,77 +868,34 @@ impl OsuPerformanceCalculator<'_> {
         let is_ez = self.mods.ez();
         let is_nf = self.mods.nf();
 
-        // ── n50 effective miss inflation ─────────────────────────────
-        //
-        // n50_eff_misses = n50 × od_factor × ar_factor × combo_factor
-        //
-        // OD factor: ((10 − od) / 9)³, clamped to [0, 1].
-        //   OD ≤ 1 → 1.000     (each n50 = full miss)
-        //   OD  3  → 0.470
-        //   OD  5  → 0.171     (steep drop-off below here)
-        //   OD  7  → 0.037
-        //   OD  9  → 0.001
-        //   OD 10  → 0.000
-        //
-        // AR factor:
-        //   AR ≥ 9 → 1.0       (always max n50 misses)
-        //   AR  8  → 0.5       (linear taper)
-        //   AR ≤ 7 → 0.0       (n50 misses don't count — low AR hard to read)
-        //
-        // Combo factor (maps ≥ 1300 max_combo only):
-        //   Scales linearly from 1.0 at combo 1300 to 0.0 at combo 10000.
-        //   Maps under 1300: combo_factor = 1.0 (no reduction).
-        //
-        // EZ or NF: n50 misses removed entirely.
-
+        // ── Softened n50 effective miss inflation ─────────────────────
+        // Low OD/AR maps treat 50s much more gently so timing inaccuracy 
+        // doesn't compound heavily with actual misses.
         let n50_eff_misses = if (is_ez || is_nf) || n50 == 0 {
             0.0
         } else {
-            // Smoothly derive an effective guaranteed miss threshold from OD and AR.
-            // Low OD + high AR should yield a higher guaranteed miss floor,
-            // but the result should be continuous rather than stepped.
-            let od_factor = ((7.0 - od).clamp(0.0, 4.0) / 4.0).powf(1.4);
-            let ar_factor = ((ar - 7.0).clamp(0.0, 2.0) / 2.0).powf(0.9);
-
-            let guaranteed_threshold = 1.0 + 2.0 * (od_factor * ar_factor).clamp(0.0, 1.0);
             let n50_f = f64::from(n50);
 
-            let guaranteed_count = n50_f.min(guaranteed_threshold);
-            let remaining_n50 = (n50_f - guaranteed_count).max(0.0);
-
-            // Use an exponent on the remaining 50s so they fade out smoothly
-            // instead of behaving like a hard count.
-            let remaining_scale = 0.55 + 0.45 * (od_factor * ar_factor);
-            let remaining_scaled = remaining_n50.powf(1.12) * remaining_scale;
-
-            guaranteed_count + remaining_scaled;
-            
-            // OD factor: exponential, steep below OD 5
-            let od_factor = if od <= 1.0 {
-                1.0
+            // Scale OD factor so lower OD (OD < 8) treats 50s gently
+            let od_factor = if od <= 4.0 {
+                0.05
             } else {
-                ((10.0 - od) / 9.0).powf(3.0).clamp(0.0, 1.0)
+                ((od - 4.0) / 6.0).clamp(0.0, 1.0).powf(1.8)
             };
 
-            // AR factor: AR >= 9 full, AR 7-9 linear, AR < 7 zero
+            // AR factor: lower AR reduces 50 penalty
             let ar_factor = if ar >= 9.0 {
                 1.0
             } else if ar >= 7.0 {
                 (ar - 7.0) / 2.0
             } else {
-                0.0
+                0.2
             };
 
-            // Combo factor: maps >= 1300 combo scale down, 0 at 10000
-            let combo_factor = if map_max_combo >= 1300 {
-                (1.0 - (f64::from(map_max_combo) - 1300.0) / (10000.0 - 1300.0))
-                    .clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            
-            // Total = (First X weighted at 1.0) + (The rest scaled down)
-            guaranteed_count + (remaining_n50 * od_factor * ar_factor * combo_factor)
+            // Combo factor: shorter maps reduce 50 impact
+            let combo_factor = (f64::from(map_max_combo) / 1000.0).clamp(0.2, 1.0);
+
+            n50_f * 0.25 * od_factor * ar_factor * combo_factor
         };
 
         let misses = effective_miss_count + n50_eff_misses;
@@ -984,8 +904,7 @@ impl OsuPerformanceCalculator<'_> {
             return 1.0;
         }
 
-        // ═════════════════════════════════════════════════════════════
-        // CC V3: Reworked exponential miss decay (continuous dynamic).
+        // Exponential miss decay (continuous dynamic).
         //
         // Replaces the stepped exponent tiers (1.5/1.7/2.1/2.3/2.4 at
         // fixed thresholds) with a smooth, continuously evolving curve:
@@ -1004,451 +923,44 @@ impl OsuPerformanceCalculator<'_> {
         // additional miss increases the exponent by a diminishing
         // amount. This eliminates the "cliff" at 2/4/6/14 misses
         // where one extra miss could jump the exponent by 0.2-0.4.
-        //
-        // Marathon softening: for maps with high max_combo, the
-        // exponent is gently reduced because long maps have more
-        // notes and each miss is proportionally less significant:
-        //
-        //   combo_softening = 1.0 − 0.15 × clamp((combo−1000)/4000, 0, 1)
-        //
-        //   combo 1000:  no softening (1.00)
-        //   combo 3000:  ×0.925
-        //   combo 5000+: ×0.85
-        //
-        // Accuracy calibration: high accuracy (>95%) on long maps
-        // gets a small relief (up to 8%) on the final multiplier.
-        // The logic: sustaining 95%+ acc while dropping a few notes
-        // means the player is genuinely consistent and the misses
-        // were isolated incidents, not a collapse.
-        //
-        //   acc_relief = 0.08 × clamp((acc−0.95)/0.05, 0, 1)
-        //              × clamp(combo/2000, 0, 1)
-        // ═════════════════════════════════════════════════════════════
 
-        let mut p: f64 = 0.998;
+        let p: f64 = 0.9985;
 
-        // Continuous exponent: smooth exponential rise from 1.5 to ~2.4
+        // Original base exponent formula
         let base_exp = 1.5 + 0.9 * (1.0 - (-misses / 8.0).exp());
 
-        // Marathon softening: longer maps get a gentler exponent
+        // Length softening starts earlier (combo >= 500) to help shorter starter maps
         let combo_f = f64::from(map_max_combo);
-        let combo_softening = 1.0 - 0.15 * ((combo_f - 1000.0) / 4000.0).clamp(0.0, 1.0);
+        let combo_softening = 1.0 - 0.20 * ((combo_f - 500.0) / 4500.0).clamp(0.0, 1.0);
 
         let miss_exp = base_exp * combo_softening;
 
-        // Compute the miss weight using the continuous exponent
+        // Compute the miss weight
         let miss_weight = misses.powf(miss_exp);
 
         // Base multiplier from exponential decay
         let mut result = p.powf(miss_weight);
 
-        // Accuracy calibration: high acc on long maps → small relief
+        // Relative miss density relief for short maps
+        let total_hits = self.total_hits();
+        if total_hits > 0.0 {
+            let miss_ratio = misses / total_hits;
+            let len_relief = (1.0 - miss_ratio.powf(0.85)).clamp(0.0, 1.0);
+            result = result.max(0.25 * len_relief);
+        }
+
+        // Accuracy relief kicks in at 92%+ acc instead of 95%+
         let acc = self.acc;
-        let acc_relief = 0.0
-            * ((acc - 0.95) / 0.05).clamp(0.0, 1.0)
-            * (combo_f / 2000.0).clamp(0.0, 1.0);
+        let acc_relief = 0.05
+            * ((acc - 0.92) / 0.08).clamp(0.0, 1.0)
+            * (combo_f / 1500.0).clamp(0.0, 1.0);
 
         result += acc_relief;
 
-        result.min(1.0)
-    }
-}
-// * All of mod specific accuracy and miss systems are implemented here now to avoid errors and inconsistencies with the main calculation. This also makes it easier to adjust and test them since they're all in one place. * //
-
-// ── RX Miss ─────────────────────────────────────
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-fn rx_miss_multiplier(
-    chunk_hardness: &[f64],
-    chunk_avg_delta: &[f64],
-    map_median_delta: f64,
-    _n300: u32,
-    n100: u32,
-    n50: u32,
-    misses: u32,
-    state_max_combo: u32,
-    map_max_combo: u32,
-) -> f64 {
-    if misses == 0 {
-        return 1.0;
-    }
-    let chunks_n = chunk_hardness.len();
-    if chunks_n == 0 || map_max_combo == 0 {
-        return flat_fallback(misses);
-    }
-
-    let total_hardness: f64 = chunk_hardness.iter().sum();
-    if total_hardness <= 0.0 {
-        return flat_fallback(misses);
-    }
-
-    let n100_f = f64::from(n100);
-    let n50_f = f64::from(n50);
-
-    let mut chunk_n100 = vec![0.0f64; chunks_n];
-    let mut chunk_n50 = vec![0.0f64; chunks_n];
-    for (i, h) in chunk_hardness.iter().enumerate() {
-        let share = h / total_hardness;
-        chunk_n100[i] = n100_f * share;
-        chunk_n50[i] = n50_f * share;
-    }
-
-    let pair_count = (chunks_n + 1) / 2;
-    let mut pair_weights: Vec<f64> = Vec::with_capacity(pair_count);
-    let mut pair_avg_deltas: Vec<f64> = Vec::with_capacity(pair_count);
-
-    for p in 0..pair_count {
-        let i0 = 2 * p;
-        let i1 = i0 + 1;
-
-        let (n_notes, p_n100, p_n50, avg_d) = if i1 < chunks_n {
-            (
-                8.0,
-                chunk_n100[i0] + chunk_n100[i1],
-                chunk_n50[i0] + chunk_n50[i1],
-                (chunk_avg_delta.get(i0).copied().unwrap_or(0.0)
-                    + chunk_avg_delta.get(i1).copied().unwrap_or(0.0))
-                    / 2.0,
-            )
-        } else {
-            (
-                4.0,
-                chunk_n100[i0],
-                chunk_n50[i0],
-                chunk_avg_delta.get(i0).copied().unwrap_or(0.0),
-            )
-        };
-
-        let p_n300 = (n_notes - p_n100 - p_n50).max(0.0);
-        let weighted_sum = p_n300 * 1.0 + p_n100 * 0.9 + p_n50 * 0.85;
-        pair_weights.push((weighted_sum / n_notes).clamp(0.0, 1.0));
-        pair_avg_deltas.push(avg_d);
-    }
-
-    if pair_weights.is_empty() {
-        return flat_fallback(misses);
-    }
-
-    let pair_percentile = percentile_ranks(&pair_weights);
-
-    let mut chunk_weights: Vec<f64> = Vec::with_capacity(chunks_n);
-    for i in 0..chunks_n {
-        let c_n300 = (4.0 - chunk_n100[i] - chunk_n50[i]).max(0.0);
-        let ws = c_n300 * 1.0 + chunk_n100[i] * 0.9 + chunk_n50[i] * 0.85;
-        chunk_weights.push((ws / 4.0).clamp(0.0, 1.0));
-    }
-    let chunk_percentile = percentile_ranks(&chunk_weights);
-
-    let combo_ratio = (f64::from(state_max_combo) / f64::from(map_max_combo)).clamp(0.0, 1.0);
-    let miss_pair_idx = ((combo_ratio * pair_count as f64) as usize).min(pair_count - 1);
-
-    let first_pct = pair_percentile[miss_pair_idx];
-    let first_delta = pair_avg_deltas[miss_pair_idx];
-
-    const MAX_PENALTY: f64 = 0.45;
-    const MIN_PENALTY: f64 = 0.88;
-
-    let t = cubic_ease(first_pct);
-    let mut first_mult = MAX_PENALTY + (MIN_PENALTY - MAX_PENALTY) * t;
-
-    if miss_pair_idx > 0 {
-        let prev_pct = pair_percentile[miss_pair_idx - 1];
-        if prev_pct < 0.30 {
-            let relief = 0.08 * (1.0 - prev_pct / 0.30);
-            first_mult += relief;
-        }
-    }
-    if miss_pair_idx + 1 < pair_count {
-        let next_pct = pair_percentile[miss_pair_idx + 1];
-        if next_pct < 0.30 {
-            let relief = 0.04 * (1.0 - next_pct / 0.30);
-            first_mult += relief;
-        }
-    }
-
-    if map_median_delta > 0.0 && first_delta > 0.0 {
-        let speed_ratio = map_median_delta / first_delta;
-        if speed_ratio > 1.10 {
-            let relief = ((speed_ratio - 1.10) / 0.50).clamp(0.0, 1.0) * 0.12;
-            first_mult += relief;
-        } else if speed_ratio < 0.90 {
-            let extra = ((0.90 - speed_ratio) / 0.40).clamp(0.0, 1.0) * 0.06;
-            first_mult -= extra;
-        }
-    }
-
-    first_mult = first_mult.clamp(MAX_PENALTY, MIN_PENALTY);
-
-    let extra_misses = misses.saturating_sub(1);
-    let mut mult = first_mult;
-
-    if extra_misses > 0 {
-        let first_chunk = ((combo_ratio * chunks_n as f64) as usize).min(chunks_n - 1);
-        let tail_hardness: f64 = chunk_hardness[first_chunk..].iter().sum();
-
-        let mut extra_applied = 0u32;
-        if tail_hardness > 0.0 {
-            for i in first_chunk..chunks_n {
-                if extra_applied >= extra_misses {
-                    break;
-                }
-                let share = chunk_hardness[i] / tail_hardness;
-                let misses_here = (f64::from(extra_misses) * share).round().max(0.0) as u32;
-                let misses_here = misses_here.min(extra_misses - extra_applied);
-
-                if misses_here > 0 {
-                    let cpct = chunk_percentile[i];
-                    let ct = cubic_ease(cpct);
-                    let per_miss = 0.86 + (0.97 - 0.86) * ct;
-
-                    let chunk_d = chunk_avg_delta.get(i).copied().unwrap_or(0.0);
-                    let bpm_adj = if map_median_delta > 0.0 && chunk_d > 0.0 {
-                        let sr = map_median_delta / chunk_d;
-                        if sr > 1.15 {
-                            1.0 + ((sr - 1.15) / 0.50).clamp(0.0, 1.0) * 0.03
-                        } else if sr < 0.85 {
-                            1.0 - ((0.85 - sr) / 0.35).clamp(0.0, 1.0) * 0.02
-                        } else {
-                            1.0
-                        }
-                    } else {
-                        1.0
-                    };
-
-                    let adjusted = (per_miss * bpm_adj).clamp(0.84, 0.98);
-                    mult *= adjusted.powf(f64::from(misses_here));
-                    extra_applied += misses_here;
-                }
-            }
-        }
-
-        if extra_applied < extra_misses {
-            let rem = extra_misses - extra_applied;
-            mult *= 0.92_f64.powf(f64::from(rem));
-        }
-    }
-
-    mult.max(0.35)
-}
-
-#[allow(dead_code)]
-fn cubic_ease(x: f64) -> f64 {
-    if x < 0.5 {
-        4.0 * x * x * x
-    } else {
-        1.0 - (-2.0 * x + 2.0).powi(3) / 2.0
+        result.clamp(0.20, 1.0)
     }
 }
 
-#[allow(dead_code)]
-fn percentile_ranks(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    if n <= 1 {
-        return vec![0.5; n];
-    }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        values[a]
-            .partial_cmp(&values[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut ranks = vec![0.0f64; n];
-    for (rank, &idx) in indices.iter().enumerate() {
-        ranks[idx] = rank as f64 / (n - 1) as f64;
-    }
-    ranks
-}
-
-#[allow(dead_code)]
-fn flat_fallback(misses: u32) -> f64 {
-    0.80_f64.powf(f64::from(misses)).max(0.40)
-}
-
-// ── AP Miss ─────────────────────────────────────
-#[allow(clippy::too_many_arguments)]
-fn ap_miss_multiplier(
-    od: f64,
-    dominant_tap_bpm: f64,
-    _chunk_hardness: &[f64],
-    chunk_avg_delta: &[f64],
-    n300: u32,
-    n100: u32,
-    n50: u32,
-    real_misses: u32,
-    state_max_combo: u32,
-    map_max_combo: u32,
-) -> f64 {
-    let total_hits = n300 + n100 + n50 + real_misses;
-    if total_hits == 0 {
-        return 1.0;
-    }
-
-    let combo_scaling = if real_misses > 0 && map_max_combo > 0 {
-        let ratio = (f64::from(state_max_combo) / f64::from(map_max_combo)).clamp(0.0, 1.0);
-        (0.70 + 0.30 * ratio.powf(0.65)).min(1.0)
-    } else {
-        1.0
-    };
-
-    let real_miss_penalty = if real_misses > 0 {
-        let combo_ratio = if map_max_combo > 0 {
-            (f64::from(state_max_combo) / f64::from(map_max_combo)).clamp(0.0, 1.0)
-        } else {
-            0.5
-        };
-
-        let miss_bpm = estimate_bpm_at(combo_ratio, chunk_avg_delta, dominant_tap_bpm);
-
-        let bpm_factor = if dominant_tap_bpm > 0.0 && miss_bpm > 0.0 {
-            let ratio = miss_bpm / dominant_tap_bpm;
-            if ratio > 1.15 {
-                let relief = ((ratio - 1.15) / 0.45).clamp(0.0, 1.0);
-                0.93 + 0.03 * relief
-            } else if ratio < 0.85 {
-                let extra = ((0.85 - ratio) / 0.35).clamp(0.0, 1.0);
-                0.93 - 0.05 * extra
-            } else {
-                0.93
-            }
-        } else {
-            0.93
-        };
-
-        let n100_ratio = f64::from(n100) / f64::from(total_hits);
-        let n100_relief = if n100_ratio > 0.05 {
-            ((n100_ratio - 0.05) * 50.0).clamp(0.0, 1.0) * 0.03
-        } else {
-            0.0
-        };
-
-        let per_miss = (bpm_factor + n100_relief).clamp(0.86, 0.97);
-        per_miss.powf(f64::from(real_misses)).max(0.45)
-    } else {
-        1.0
-    };
-
-    let n50_penalty = if n50 > 0 {
-        let od_factor = (1.0 - od / 10.0).clamp(0.0, 1.0);
-        let exponent = f64::from(n50) * od_factor;
-        if exponent > 0.0 {
-            let first_hit = 0.88_f64.powf(od_factor.min(1.0));
-            let rest = if n50 > 1 {
-                0.92_f64.powf((f64::from(n50) - 1.0) * od_factor)
-            } else {
-                1.0
-            };
-            (first_hit * rest).max(0.70)
-        } else {
-            1.0
-        }
-    } else {
-        1.0
-    };
-
-    let bpm_variability_relief = if chunk_avg_delta.len() >= 4 {
-        let mean_d: f64 = chunk_avg_delta.iter().sum::<f64>() / chunk_avg_delta.len() as f64;
-        if mean_d > 0.0 {
-            let variance: f64 = chunk_avg_delta
-                .iter()
-                .map(|d| (d - mean_d).powi(2))
-                .sum::<f64>()
-                / chunk_avg_delta.len() as f64;
-            let cv = variance.sqrt() / mean_d;
-            if cv > 0.15 {
-                ((cv - 0.15) / 0.30).clamp(0.0, 1.0) * 0.05
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        }
-    } else {
-        0.0
-    };
-
-    let raw = combo_scaling * real_miss_penalty * n50_penalty + bpm_variability_relief;
-    raw.clamp(0.45, 1.0)
-}
-
-fn estimate_bpm_at(combo_ratio: f64, chunk_avg_delta: &[f64], dominant_bpm: f64) -> f64 {
-    if chunk_avg_delta.is_empty() {
-        return dominant_bpm;
-    }
-    let n = chunk_avg_delta.len();
-    let idx = ((combo_ratio * n as f64) as usize).min(n - 1);
-    let delta = chunk_avg_delta[idx];
-    if delta > 0.0 {
-        15_000.0 / delta
-    } else {
-        dominant_bpm
-    }
-}
-
-// ── NoFail ──────────────────────────────────────
-pub fn nf_multiplier(
-    map_max_combo: u32,
-    player_max_combo: u32,
-    misses: u32,
-    total_hits: u32,
-    n_objects: u32,
-    accuracy: f64,
-    hp: f64,
-) -> f64 {
-    if total_hits < n_objects / 2 {
-        return 0.0;
-    }
-
-    if total_hits < n_objects {
-        let completion = f64::from(total_hits) / f64::from(n_objects);
-        return (completion * 0.20).min(0.20);
-    }
-
-    let mc = f64::from(map_max_combo);
-    let miss_f = f64::from(misses);
-
-    let fail_mult = if hp > 0.0 {
-        let hp_drain_per_miss = 0.02 * hp;
-        let hp_recovery_per_hit = ((accuracy - 0.80) / 0.20 * 0.04).clamp(0.0, 0.04);
-
-        let total_hits_f = f64::from(total_hits);
-        let non_misses = (total_hits_f - miss_f).max(0.0);
-
-        let net_recovery = non_misses * hp_recovery_per_hit;
-        let net_drain = miss_f * hp_drain_per_miss;
-
-        if net_drain > net_recovery {
-            let drain_rate = (net_drain - net_recovery) / total_hits_f;
-            let notes_until_fail = if drain_rate > 0.0 { 1.0 / drain_rate } else { total_hits_f };
-            let fail_fraction = (notes_until_fail / total_hits_f).clamp(0.0, 1.0);
-            fail_fraction.powf(0.5)
-        } else {
-            1.0
-        }
-    } else {
-        1.0
-    };
-
-    let short_tax = if map_max_combo < 1000 {
-        let base = 0.70 + 0.30 * (mc / 1000.0);
-        let miss_relief = 0.015 * miss_f.min(15.0);
-        (base + miss_relief).min(1.0)
-    } else {
-        1.0
-    };
-
-    let symmetric_mult = if map_max_combo >= 1000 && misses > 0 && mc > 0.0 {
-        let combo_ratio = (f64::from(player_max_combo) / mc).clamp(0.0, 1.0);
-        let prox = 1.0 - ((combo_ratio - 0.5).abs() / 0.5).min(1.0);
-        0.95 - 0.13 * prox
-    } else {
-        1.0
-    };
-
-    let miss_decay = if misses > 0 {
-        0.97_f64.powf(miss_f).max(0.50)
-    } else {
-        1.0
-    };
-
-    (fail_mult * short_tax * symmetric_mult * miss_decay).max(0.0)
-}
+// AP & NF miss system imports
+use super::ap_miss::ap_miss_multiplier;
+use super::nofail::nf_multiplier;

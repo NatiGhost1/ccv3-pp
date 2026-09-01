@@ -19,7 +19,42 @@ impl<'a> ManiaPerformanceCalculator<'a> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chordjack_maps_are_nerfed() {
+        let attrs = ManiaDifficultyAttributes {
+            stars: 7.5,
+            n_objects: 300,
+            n_hold_notes: 60,
+            max_combo: 420,
+            is_convert: false,
+        };
+        let mods = GameMods::default();
+        let calc = ManiaPerformanceCalculator::new(attrs.clone(), &mods, ManiaScoreState::default());
+
+        assert!(calc.chordjack_nerf() < 1.0);
+    }
+}
+
 impl ManiaPerformanceCalculator<'_> {
+    fn chordjack_nerf(&self) -> f64 {
+        let total_notes = self.attrs.n_objects.max(1);
+        let hold_ratio = self.attrs.n_hold_notes as f64 / total_notes as f64;
+        let star_pressure = (self.attrs.stars - 5.0).clamp(0.0, 6.0) / 6.0;
+        let low_hold_pressure = (0.30 - hold_ratio).clamp(0.0, 0.30) / 0.30;
+
+        // Chordjacks are usually dense, note-heavy patterns with unusually few
+        // hold notes. They score high star values but are less representative of
+        // true technical lock consistency than similar star maps with more
+        // natural spacing.
+        let intensity = (star_pressure * low_hold_pressure).clamp(0.0, 1.0);
+
+        1.0 - (intensity * 0.35).clamp(0.0, 0.35)
+    }
+
     pub fn calculate(self) -> ManiaPerformanceAttributes {
         let mut multiplier = 1.0;
 
@@ -30,6 +65,8 @@ impl ManiaPerformanceCalculator<'_> {
         if self.mods.ez() {
             multiplier *= 0.5;
         }
+
+        multiplier *= self.chordjack_nerf();
 
         let difficulty_value = self.compute_difficulty_value();
         let pp = difficulty_value * multiplier;

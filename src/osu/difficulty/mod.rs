@@ -168,7 +168,13 @@ impl DifficultyValues {
 
         let great_hit_window = map_attrs.hit_windows().od_great.unwrap_or(0.0);
 
-        let mut skills = OsuSkills::new(mods, &scaling_factor, great_hit_window, time_preempt);
+        let mut skills = OsuSkills::new(
+            mods,
+            &scaling_factor,
+            great_hit_window,
+            time_preempt,
+            attrs.ar,
+        );
 
         // The first hit object has no difficulty object
         let take_diff_objects = cmp::min(map.hit_objects.len(), take).saturating_sub(1);
@@ -307,6 +313,7 @@ impl DifficultyValues {
             speed,
             flashlight,
             memory,
+            reading,
         } = skills;
 
         let aim_difficulty_value = aim.cloned_difficulty_value();
@@ -370,13 +377,22 @@ impl DifficultyValues {
 
         attrs.memory = memory.clone().difficulty();
 
+        let reading_difficulty = reading.cloned_difficulty_value();
+        attrs.reading = reading_difficulty;
+        let reading_rating = if mods.rx() {
+            0.0
+        } else {
+            reading_difficulty * 0.09
+        };
+
         let base_aim_performance = Aim::difficulty_to_performance(aim_rating);
         let base_speed_performance = Speed::difficulty_to_performance(speed_rating);
         let base_flashlight_performance = Flashlight::difficulty_to_performance(flashlight_rating);
 
         let base_performance = ((base_aim_performance).powf(1.1)
             + (base_speed_performance).powf(1.1)
-            + (base_flashlight_performance).powf(1.1))
+            + (base_flashlight_performance).powf(1.1)
+            + (reading_rating).powf(1.1))
         .powf(1.0 / 1.1);
 
         let star_rating = calculate_star_rating(base_performance);

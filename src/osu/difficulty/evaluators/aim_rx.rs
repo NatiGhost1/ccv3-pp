@@ -12,17 +12,17 @@
 //   * Delayed tech buff — avoids immediate tech application right after farm
 //     sections to prevent disproportionate strain from isolated anomalies.
 //   * Tech boost overall cap — limits maximum positive adjustment.
-//   * Akat calibration — scales output to approximately match ccv3-pp-rs
-//     despite rosu's higher SKILL_MULTIPLIER and wider angle bonus shapes.
+//   * Aim calibration — Calibrates aim values to reflect true skill,
+//     compensating for ccv3-pp evaluation bias.
 //
-// Akat calibration details:
-//   Derivation: akat_rx / akat_vanilla × rosu_vanilla × (25.18/26.0)
-//     Wide:  1.56/1.45 × 1.5 × 0.968 = 1.56
-//     Acute: 2.05/1.90 × 2.55 × 0.968 = 2.66
-//     Slider: 1.20/1.35 × 1.35 × 0.968 = 1.16
-//     VelCh: 0.78/0.70 × 0.75 × 0.968 = 0.81
-//   Final AKAT_CALIBRATION (0.92) accounts for cumulative angle shape
-//   differences (smoothstep broader than sin²) + SKILL_MULTIPLIER gap.
+// Rework Additions:
+//   * Pseudo-stacks — No pp awarded for objects too close together (under 10px).
+//   * Stack-to-Dense Transitions — Penalizes moving from pseudo-stacks to dense spaced objects.
+//   * Precision Scaling — Nerfs have reduced impact on smaller circle sizes.
+//   * Cross-Screen Adjustments — Only triggers if accompanied by N/X or slop patterns.
+//   * Slider Breakability — Short slider travel distances grant no bonus.
+//   * Hybrid Section Buff — Buffs patterns with high distance variance (flow to jumps) 
+//     that do not trigger neutral flow.
 //
 // Uses rosu's formula base (smoothstep/smootherstep, adjusted_delta_time,
 // wiggle_bonus, small_circle_bonus, DIAMETER-based gating).
@@ -220,8 +220,11 @@ impl AimRxEvaluator {
     const SLIDER_MULTIPLIER: f64 = 1.03;
     const VELOCITY_CHANGE_MULTIPLIER: f64 = 0.81;
     const WIGGLE_MULTIPLIER: f64 = 1.02;
+    const AIM_CALIBRATION: f64 = 0.92;
 
-    const AKAT_CALIBRATION: f64 = 0.92; // 0.92 but im testing what happens rn
+    // New Thresholds for Stacks/Dense
+    const PSEUDO_STACK_THRESHOLD: f64 = 10.0;
+    const DENSE_SPACING_THRESHOLD: f64 = 45.0;
 
     // ── Stream-density nerf (CC V3) ─────────────────────────────────
     // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
@@ -274,7 +277,8 @@ impl AimRxEvaluator {
     const SLOP_MAX_NERF: f64 = 0.35;
     
     const TECH_MAX_BOOST: f64 = 0.08;
-
+    const HYBRID_MAX_BOOST: f64 = 0.12;
+    
     // Additional tuning constants
     const TECH_OVERALL_CAP: f64 = 1.08;
 
@@ -587,13 +591,16 @@ impl AimRxEvaluator {
         }
 
         // ── Slider bonus with slow-slider taper ─────────────────────
+        // Slider breakability check
         if osu_last_obj.base.is_slider() {
-            let travel_vel = osu_last_obj.travel_dist / osu_last_obj.travel_time;
-            slider_bonus = travel_vel;
+            if osu_last_obj.travel_dist > osu_curr_obj.circle_radius * 1.2 {
+                let travel_vel = osu_last_obj.travel_dist / osu_last_obj.travel_time;
+                slider_bonus = travel_vel;
 
-            if travel_vel < Self::SLOW_SLIDER_VEL_FLOOR {
-                let ratio = (travel_vel / Self::SLOW_SLIDER_VEL_FLOOR).clamp(0.0, 1.0);
-                slider_bonus *= 0.55 + 0.45 * ratio;
+                if travel_vel < Self::SLOW_SLIDER_VEL_FLOOR {
+                    let ratio = (travel_vel / Self::SLOW_SLIDER_VEL_FLOOR).clamp(0.0, 1.0);
+                    slider_bonus *= 0.55 + 0.45 * ratio;
+                }
             }
         }
 
@@ -614,6 +621,20 @@ impl AimRxEvaluator {
         // CC V3 RX-specific nerfs and boosts (post-combine)
         // ═════════════════════════════════════════════════════════════
 
+        // No pp for pseudo-stacks
+        if osu_curr_obj.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD {
+            return 0.0;
+        }
+
+        // Stack to dense transitions and precision scaling
+        // Note: Precision scaling probably needs changed to correctly work
+        let precision_scaler = (osu_curr_obj.circle_radius / 36.0).clamp(0.2, 1.0);
+        if osu_last_obj.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD 
+            && osu_curr_obj.lazy_jump_dist <= Self::DENSE_SPACING_THRESHOLD 
+        {
+            aim_strain *= 1.0 - (0.4 * precision_scaler);
+        }
+
         let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
         let no_followpoint_streak =
             Self::recent_no_followpoint_streak(osu_curr_obj, diff_objects, 6);
@@ -627,7 +648,6 @@ impl AimRxEvaluator {
         // ── N/X alternating pattern severity ─────────────────────────────
         let nx_severity = if !skip_farm_detection {
             let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
             if nx_strength > 0.05 {
                 let (dist_mean, dist_stddev, dist_n) =
                     windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
@@ -677,6 +697,7 @@ impl AimRxEvaluator {
         };
 
         // ── Cross-screen constant-distance nerf ─────────────────────
+        // Cross-screen strictly relies on N/X or Slop
         if !flow_active && !skip_farm_detection && osu_curr_obj.adjusted_delta_time >= Self::CONSTANT_DIST_BPM_STRAIN_TIME {
             let curr_d = osu_curr_obj.lazy_jump_dist;
             let prev_d = osu_last_obj.lazy_jump_dist;
@@ -697,7 +718,9 @@ impl AimRxEvaluator {
                         - ((max_d - 80.0) / (Self::EDGE_TO_EDGE_THRESHOLD - 80.0))
                             .clamp(0.0, 1.0);
                     let severity = (1.0 - (change_ratio / Self::CONSTANT_DIST_RATIO)) * dist_factor;
-                    cross_screen_nerf = 0.15 * severity;
+                    
+                    let cross_pattern_offender = (nx_severity + slop_severity).clamp(0.0, 1.0);
+                    cross_screen_nerf = 0.15 * severity * cross_pattern_offender; 
                 }
             }
         }
@@ -744,11 +767,15 @@ impl AimRxEvaluator {
         }
 
         let mut tech_boost = 0.0;
+        let mut hybrid_boost = 0.0;
+
         if !flow_active && !skip_farm_detection {
             let (_, angle_stddev, angle_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
             let (vel_mean, vel_stddev, vel_n) =
                 windowed_vel_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
+            let (dist_mean, dist_stddev, dist_n) = 
+                windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
             if angle_n >= 4 && vel_n >= 4 {
                 let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
@@ -757,11 +784,24 @@ impl AimRxEvaluator {
                 let tech_signal = angle_variety * vel_variety;
                 tech_boost = Self::TECH_MAX_BOOST * tech_signal;
             }
+
+            // Hybrid Section Boost
+            if dist_n >= 4 {
+                let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 0.0 };
+                // High distance variance (mixed jumps/streams) and not just a single transition
+                if dist_cv > 0.40 && dist_mean > 30.0 {
+                    hybrid_boost = (dist_cv - 0.40).clamp(0.0, 1.0) * Self::HYBRID_MAX_BOOST;
+                }
+            }
         }
 
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
-        let farm_nerf = farm_nerf * Self::relax_repeat_nerf_radius_factor(osu_curr_obj.circle_radius);
+        
+        // Precision scales the repeat nerf
+        let mut repeat_nerf_factor = Self::relax_repeat_nerf_radius_factor(osu_curr_obj.circle_radius);
+        repeat_nerf_factor = 1.0 - ((1.0 - repeat_nerf_factor) * precision_scaler);
+        let farm_nerf = farm_nerf * repeat_nerf_factor;
 
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
@@ -776,7 +816,8 @@ impl AimRxEvaluator {
                 && !Self::is_stream_pattern(osu_curr_obj, diff_objects);
 
             if apply_tech {
-                aim_strain *= (1.0 + tech_boost).min(Self::TECH_OVERALL_CAP);
+                let total_boost = tech_boost.max(hybrid_boost);
+                aim_strain *= (1.0 + total_boost).min(Self::TECH_OVERALL_CAP);
             }
         }
 
@@ -797,7 +838,7 @@ impl AimRxEvaluator {
         }
 
         // ── Akat calibration ────────────────────────────────────────
-        aim_strain *= Self::AKAT_CALIBRATION;
+        aim_strain *= Self::AIM_CALIBRATION;
 
         aim_strain
     }

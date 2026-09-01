@@ -47,13 +47,23 @@ impl Speed {
         objects: &[OsuDifficultyObject<'_>],
     ) -> f64 {
         self.current_strain *= strain_decay(curr.adjusted_delta_time, Self::STRAIN_DECAY_BASE);
-        self.current_strain += SpeedEvaluator::evaluate_diff_of(
+
+        let mut speed_eval = SpeedEvaluator::evaluate_diff_of(
             curr,
             objects,
             self.hit_window,
             self.has_autopilot_mod,
-        ) * Self::SKILL_MULTIPLIER;
-        self.current_rhythm = RhythmEvaluator::evaluate_diff_of(curr, objects, self.hit_window);
+        );
+        let mut rhythm_eval = RhythmEvaluator::evaluate_diff_of(curr, objects, self.hit_window);
+
+        // Applies a 25% buff to both speed and rhythm evaluations when Autopilot is enabled
+        if self.has_autopilot_mod {
+            speed_eval *= 1.25;
+            rhythm_eval *= 1.25;
+        }
+
+        self.current_strain += speed_eval * Self::SKILL_MULTIPLIER;
+        self.current_rhythm = rhythm_eval;
 
         let total_strain = self.current_strain * self.current_rhythm;
 
