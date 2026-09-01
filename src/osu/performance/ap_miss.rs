@@ -20,6 +20,36 @@
 // n50 penalty. Top tappers are human — n50s shouldn't cascade into
 // combo-position penalties.
 
+fn per_miss_combo_scaling(state_max_combo: u32, map_max_combo: u32, real_misses: u32) -> f64 {
+    if real_misses == 0 || map_max_combo == 0 {
+        return 1.0;
+    }
+
+    let overall_ratio =
+        (f64::from(state_max_combo) / f64::from(map_max_combo)).clamp(0.0, 1.0);
+
+    let mut total = 0.0;
+    for miss_index in 1..=real_misses {
+        let scale = if miss_index == 1 {
+            // Keep the first miss anchored. It should not be softened or
+            // hardened based on late-map combo when the player happened to
+            // reach a high combo before their first miss.
+            1.0
+        } else {
+            // Approximate how far into the map the player had progressed before
+            // this miss. Misses that happen later in the play get a larger
+            // pre-miss combo weight; earlier misses are harsher.
+            let remaining = (real_misses - 1).max(1);
+            let miss_progress = (miss_index - 1) as f64 / remaining as f64;
+            let combo_before_miss = overall_ratio * miss_progress;
+            (0.70 + 0.30 * combo_before_miss.powf(0.65)).clamp(0.70, 1.0)
+        };
+        total += scale;
+    }
+
+    total / f64::from(real_misses)
+}
+
 /// Compute the AP miss penalty multiplier.
 ///
 /// Returns [0.45, 1.00]. 1.0 on FC with no n50s.
@@ -42,15 +72,12 @@ pub(crate) fn ap_miss_multiplier(
     }
 
     // ── 1. Real-miss combo scaling ──────────────────────────────────
-    // Only real misses contribute. Toned-down exponent (0.65 vs 0.8).
-    // Combo scaling is NOT applied to n50 penalties per spec.
-    let combo_scaling = if real_misses > 0 && map_max_combo > 0 {
-        let ratio =
-            (f64::from(state_max_combo) / f64::from(map_max_combo)).clamp(0.0, 1.0);
-        (0.70 + 0.30 * ratio.powf(0.65)).min(1.0)
-    } else {
-        1.0
-    };
+    // Combo scaling is based on how much of the map was already completed
+    // before each miss. The very first miss is kept fixed; later misses are
+    // weighted by the amount of combo the player had built before that miss.
+    // This keeps the penalty responsive to miss timing without letting the
+    // first miss be cheapened by a late-map combo spike.
+    let combo_scaling = per_miss_combo_scaling(state_max_combo, map_max_combo, real_misses);
 
     // ── 2. Real-miss per-miss penalty with BPM-relative weighting ───
     let real_miss_penalty = if real_misses > 0 {

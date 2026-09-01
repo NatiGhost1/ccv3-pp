@@ -1,6 +1,12 @@
 use std::{env, fmt::Display, path::PathBuf, process::exit, time::SystemTime};
 
-use ccv3_pp::{any::PerformanceAttributes, Beatmap, Difficulty, GameMods, Performance};
+use ccv3_pp::{
+    Beatmap, Difficulty, GameMods, Performance,
+    any::{
+        PerformanceAttributes,
+        hitresult_generator::{Closest, Composable},
+    },
+};
 use rosu_mods::GameModsLegacy;
 
 const DEFAULT_PLAYS: usize = 5;
@@ -11,6 +17,8 @@ struct SpecificPlay {
     handling: Option<Handling>,
     combo: Option<u32>,
     misses: Option<u32>,
+    n100: Option<u32>,
+    n50: Option<u32>,
     accuracy: Option<f64>,
 }
 
@@ -26,6 +34,8 @@ impl SpecificPlay {
             && self.handling.is_none()
             && self.combo.is_none()
             && self.misses.is_none()
+            && self.n100.is_none()
+            && self.n50.is_none()
             && self.accuracy.is_none()
     }
 }
@@ -37,11 +47,16 @@ fn print_usage(program: &str) {
     eprintln!("  --handling <mode>   Select VN (vanilla) or RX (Relax) calculation handling");
     eprintln!("  --combo <combo>     Specify play combo");
     eprintln!("  --misses <misses>   Specify play misses");
+    eprintln!("  --100s <count>      Specify number of 100s");
+    eprintln!("  --50s <count>       Specify number of 50s");
     eprintln!("  --accuracy <acc>    Specify play accuracy in %");
     eprintln!("  --plays <plays>     Number of plays to generate");
     eprintln!("  --seed <seed>       Seed for random generation of unspecified fields");
+    eprintln!("  --all               Show the full diagnostic breakdown");
     eprintln!("  -h, --help          Show this help message");
-    eprintln!("Example: {program} ./resources/5553026.osu 1 12345 --mods HDDT --misses 150 --accuracy 95.42");
+    eprintln!(
+        "Example: {program} ./resources/5553026.osu 1 12345 --mods HDDT --misses 150 --accuracy 95.42"
+    );
 }
 
 struct SimpleRng(u64);
@@ -185,6 +200,7 @@ fn main() {
     let map_path = PathBuf::from(&args[1]);
     let mut plays = DEFAULT_PLAYS;
     let mut seed = None;
+    let mut show_all = false;
     let mut explicit = SpecificPlay::default();
     let mut positional = 0;
 
@@ -247,6 +263,30 @@ fn main() {
                     exit(1);
                 }));
             }
+            "--100s" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --100s");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.n100 = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid n100: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
+            "--50s" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --50s");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                explicit.n50 = Some(value.parse().unwrap_or_else(|_| {
+                    eprintln!("Invalid n50: {value}");
+                    print_usage(&args[0]);
+                    exit(1);
+                }));
+            }
             "--accuracy" => {
                 let value = iter.next().unwrap_or_else(|| {
                     eprintln!("Missing value for --accuracy");
@@ -282,6 +322,9 @@ fn main() {
                     print_usage(&args[0]);
                     exit(1);
                 }));
+            }
+            "--all" => {
+                show_all = true;
             }
             _ if arg.starts_with('-') => {
                 eprintln!("Unknown option: {arg}");
@@ -376,15 +419,48 @@ fn main() {
                 rng.gen_range(lower_combo, max_combo + 1)
             }
         });
+        let n100 = explicit.n100.unwrap_or_else(|| {
+            if misses == 0 {
+                0
+            } else {
+                rng.gen_range(0, (misses + 1).min(10))
+            }
+        });
+        let n50 = explicit.n50.unwrap_or_else(|| {
+            if misses == 0 {
+                0
+            } else {
+                rng.gen_range(0, (misses + 1).min(10))
+            }
+        });
         let accuracy = explicit
             .accuracy
             .unwrap_or_else(|| 90.0 + (rng.gen_range(0, 1001) as f64 / 100.0));
 
-        let perf_attrs = Performance::new(diff_attrs)
-            .mods(calculation_mods)
+        let mut performance = Performance::new(diff_attrs.clone())
+            .mods(calculation_mods.clone())
             .combo(combo)
+            .n100(n100)
+            .n50(n50)
             .misses(misses)
             .accuracy(accuracy)
+            .hitresult_generator::<Composable<Closest, Closest, Closest, Closest>>();
+        let score_state = performance.generate_state();
+        let perf_attrs = performance.calculate();
+
+        let mut fc_state = score_state.clone();
+        fc_state.n300 += fc_state.misses;
+        fc_state.misses = 0;
+        fc_state.max_combo = max_combo;
+        let fc_attrs = Performance::new(diff_attrs.clone())
+            .mods(calculation_mods.clone())
+            .state(fc_state)
+            .calculate();
+        let ss_attrs = Performance::new(diff_attrs.clone())
+            .mods(calculation_mods.clone())
+            .combo(max_combo)
+            .accuracy(100.0)
+            .hitresult_generator::<Composable<Closest, Closest, Closest, Closest>>()
             .calculate();
 
         let (pp_aim, pp_speed, pp_acc, pp_flashlight) = match &perf_attrs {
@@ -406,27 +482,132 @@ fn main() {
                 _ => 0.0,
             },
         };
+        let effective_miss_count = match &perf_attrs {
+            PerformanceAttributes::Osu(attrs) => attrs.effective_miss_count,
+            _ => 0.0,
+        };
+        let total_hits = score_state.n300 + score_state.n100 + score_state.n50 + score_state.misses;
+        let achieved_accuracy = if total_hits == 0 {
+            0.0
+        } else {
+            f64::from(6 * score_state.n300 + 2 * score_state.n100 + score_state.n50)
+                / f64::from(6 * total_hits)
+        };
+        let vanilla_miss_exponent = match handling {
+            Handling::Vanilla => Some(vanilla_miss_exponent(
+                effective_miss_count,
+                score_state.n50,
+                &perf_attrs,
+            )),
+            Handling::Relax => None,
+        };
+        let miss_exponent = vanilla_miss_exponent
+            .map_or_else(|| "n/a".to_string(), |exponent| format!("{exponent:.4}"));
 
-        println!("Play #{index}");
-        println!("  Mods: {mod_list}");
-        println!(
-            "  Handling: {}",
-            match handling {
-                Handling::Vanilla => "VN",
-                Handling::Relax => "RX",
-            }
-        );
-        println!("  Stars (default): {:.2}", perf_attrs.stars());
-        println!("  Stars (weighted): {:.2}", weighted_stars);
-        println!("  PP total: {:.2}", perf_attrs.pp());
-        println!("  PP aim: {:.2}", pp_aim);
-        println!("  PP speed: {:.2}", pp_speed);
-        println!("  PP accuracy: {:.2}", pp_acc);
-        println!("  PP flashlight: {:.2}", pp_flashlight);
-        println!("  Combo: {combo}/{max_combo}");
-        println!("  Misses: {misses}");
-        println!("  Accuracy: {accuracy:.2}%\n");
+        let handling_label = match handling {
+            Handling::Vanilla => "VN",
+            Handling::Relax => "RX",
+        };
+
+        if show_all {
+            println!("#{index:02}  {mod_list}  [{handling_label}]");
+            println!(
+                "  Stars: {:.2}★ (weighted {:.2}★)",
+                perf_attrs.stars(),
+                weighted_stars
+            );
+            println!("  PP: {:.2}", perf_attrs.pp());
+            println!("  FC: {:.2} pp", fc_attrs.pp());
+            println!("  SS: {:.2} pp", ss_attrs.pp());
+            println!(
+                "  Aim: {:.2}  Speed: {:.2}  Acc: {:.2}  FL: {:.2}",
+                pp_aim, pp_speed, pp_acc, pp_flashlight
+            );
+            println!("  Combo: {combo}/{max_combo}");
+            println!(
+                "  Misses: {} ({effective_miss_count:.2} effective)",
+                score_state.misses
+            );
+            println!(
+                "  Accuracy: {accuracy:.2}% -> {:.4}%",
+                achieved_accuracy * 100.0
+            );
+            println!("  300s: {}", score_state.n300);
+            println!("  100s: {}", score_state.n100);
+            println!("  50s: {}", score_state.n50);
+            println!("  Miss weight exponent: {miss_exponent}\n");
+        } else {
+            println!("Play #{index}");
+            println!("  Mods: {mod_list} [{handling_label}]");
+            println!(
+                "  Stars: {:.2}★ (weighted {:.2}★)",
+                perf_attrs.stars(),
+                weighted_stars
+            );
+            println!("  Accuracy: {:.4}%", achieved_accuracy * 100.0);
+            println!("  Combo: {combo}/{max_combo}");
+            println!(
+                "  300s: {}  100s: {}  50s: {}",
+                score_state.n300, score_state.n100, score_state.n50
+            );
+            println!("  Misses: {}", score_state.misses);
+            println!(
+                "  PP: {:.2}  |  FC: {:.2}  |  SS: {:.2}\n",
+                perf_attrs.pp(),
+                fc_attrs.pp(),
+                ss_attrs.pp()
+            );
+        }
     }
+}
+
+fn vanilla_miss_exponent(
+    effective_miss_count: f64,
+    n50: u32,
+    perf_attrs: &PerformanceAttributes,
+) -> f64 {
+    let PerformanceAttributes::Osu(attrs) = perf_attrs else {
+        return 0.0;
+    };
+
+    let od = attrs.difficulty.od();
+    let ar = attrs.difficulty.ar;
+    let n50_effective_misses = if n50 == 0 {
+        0.0
+    } else {
+        let od_factor = ((7.0 - od).clamp(0.0, 4.0) / 4.0).powf(1.4);
+        let ar_factor = ((ar - 7.0).clamp(0.0, 2.0) / 2.0).powf(0.9);
+        let guaranteed_threshold = 1.0 + 2.0 * (od_factor * ar_factor).clamp(0.0, 1.0);
+        let n50 = f64::from(n50);
+        let guaranteed_count = n50.min(guaranteed_threshold);
+        let remaining_n50 = (n50 - guaranteed_count).max(0.0);
+        let od_factor = if od <= 1.0 {
+            1.0
+        } else {
+            ((10.0 - od) / 9.0).powf(3.0).clamp(0.0, 1.0)
+        };
+        let ar_factor = if ar >= 9.0 {
+            1.0
+        } else if ar >= 7.0 {
+            (ar - 7.0) / 2.0
+        } else {
+            0.0
+        };
+        let combo_factor = if attrs.difficulty.max_combo >= 1300 {
+            (1.0 - (f64::from(attrs.difficulty.max_combo) - 1300.0) / 8700.0).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        guaranteed_count + remaining_n50 * od_factor * ar_factor * combo_factor
+    };
+
+    let misses = effective_miss_count + n50_effective_misses;
+    let base_exp = 2.6 + 0.9 * (1.0 - (-misses / 8.0).exp());
+    let combo_softening =
+        1.0 - 0.15 * ((f64::from(attrs.difficulty.max_combo) - 1000.0) / 4000.0).clamp(0.0, 1.0);
+
+    base_exp * combo_softening
 }
 
 fn build_random_mod_combo(rng: &mut SimpleRng) -> (String, GameModsLegacy) {

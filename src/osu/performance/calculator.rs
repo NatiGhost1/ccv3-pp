@@ -128,6 +128,7 @@ impl OsuPerformanceCalculator<'_> {
                     self.state.hitresults.n100,
                     self.state.hitresults.n50,
                     self.state.hitresults.misses,
+                    self.attrs.od(),
                 )
             } else {
                 effective_miss_count

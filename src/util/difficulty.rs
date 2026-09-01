@@ -59,6 +59,26 @@ pub const fn smoothstep(x: f64, start: f64, end: f64) -> f64 {
     x * x * (3.0 - 2.0 * x)
 }
 
+// New smoothstep for aim scaling, with a more natural rise/fall than the stock smoothstep.
+pub fn smoothstep_aim(x: f64, start: f64, end: f64) -> f64 {
+    let x = reverse_lerp(x, start, end);
+
+    // Cosine-based ease-in/out creates a smoother, more natural transition than
+    // the cubic smoothstep while keeping the exact same boundary values.
+    0.5 - 0.5 * f64::cos(PI * x)
+}
+
+// New smootherstep for aim scaling, with a more natural rise/fall than the stock smootherstep.
+pub fn smootherstep_aim(x: f64, start: f64, end: f64) -> f64 {
+    let x = reverse_lerp(x, start, end);
+
+    // Slightly softer in the middle than stock smootherstep, while retaining the
+    // same 0..1 endpoints and a more natural rise/fall for aim scaling.
+    let t = x * x * x;
+    let base = t * (t * (6.0 * x - 15.0) + 10.0);
+    base * (0.92 + 0.08 * x)
+}
+
 pub const fn smootherstep(x: f64, start: f64, end: f64) -> f64 {
     let x = reverse_lerp(x, start, end);
 
@@ -133,4 +153,19 @@ pub fn erf_inv(mut x: f64) -> f64 {
     };
 
     sgn * (f64::sqrt(base_approx) + c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{smoothstep, smoothstep_aim};
+
+    #[test]
+    fn aim_gate_should_be_smoother_than_standard_smoothstep() {
+        let x = 0.25;
+        let standard = smoothstep(x, 0.0, 1.0);
+        let aim = smoothstep_aim(x, 0.0, 1.0);
+
+        assert!(aim < standard);
+        assert!((aim - 0.1464466094067262).abs() < 1e-12);
+    }
 }
