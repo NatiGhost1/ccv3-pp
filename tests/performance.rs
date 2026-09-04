@@ -298,9 +298,9 @@ fn convert_catch() {
 fn basic_mania() {
     test_cases! {
         Mania: MANIA {
-            NM => { pp: 108.92297471705167, pp_difficulty: 108.92297471705167 };
+            NM => { pp: 108.92297471705167, pp_difficulty: 108.92297471705164 };
             EZ => { pp: 54.46148735852584, pp_difficulty: 108.92297471705167 };
-            DT => { pp: 224.52717042937203, pp_difficulty: 224.52717042937203 };
+            DT => { pp: 305.6669165071399, pp_difficulty: 305.9713440137634 };
         }
     };
 }
@@ -309,9 +309,9 @@ fn basic_mania() {
 fn convert_mania() {
     test_cases! {
         Mania: OSU {
-            NM => { pp: 101.39189449271568, pp_difficulty: 101.39189449271568 };
-            EZ => { pp: 50.69594724635784, pp_difficulty: 101.39189449271568 };
-            DT => { pp: 198.46891237015896, pp_difficulty: 198.46891237015896 };
+            NM => { pp: 125.18145240688098, pp_difficulty: 125.18145240688095 };
+            EZ => { pp: 62.59072620344049, pp_difficulty: 125.18145240688098 };
+            DT => { pp: 257.0438129107922, pp_difficulty: 257.0438129107922 };
         }
     };
 }

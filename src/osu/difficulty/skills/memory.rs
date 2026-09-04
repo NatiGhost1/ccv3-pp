@@ -3,6 +3,7 @@ use crate::osu::difficulty::object::OsuDifficultyObject;
 /// Estimates the extra memorization burden created by Flashlight.
 #[derive(Clone, Debug, Default)]
 pub struct Memory {
+    enabled: bool,
     object_count: usize,
     hidden: bool,
     pattern_complexity: f64,
@@ -14,12 +15,20 @@ pub struct Memory {
 impl Memory {
     pub fn new(hidden: bool) -> Self {
         Self {
+            enabled: true,
             object_count: 0,
             hidden,
             pattern_complexity: 0.0,
             previous_delta_time: None,
             previous_position: None,
             previous_previous_position: None,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::new(false)
         }
     }
 
@@ -73,7 +82,7 @@ impl Memory {
     }
 
     pub fn difficulty(self) -> f64 {
-        if self.object_count < 100 {
+        if !self.enabled || self.object_count < 100 {
             return 0.0;
         }
 

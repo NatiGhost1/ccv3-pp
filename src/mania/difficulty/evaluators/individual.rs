@@ -23,6 +23,30 @@ impl IndividualStrainEvaluator {
         // * Factor to all additional strains in case something else is held
         let hold_factor = if with_bonus { 1.25 } else { 1.0 };
 
-        2.0 * hold_factor
+        (2.0 + 3.0 * Self::jack_factor(curr)) * hold_factor
+    }
+
+    pub fn is_jack(curr: &ManiaDifficultyObject) -> bool {
+        curr.prev_hit_objects[curr.column]
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|prev| curr.start_time - prev.get().start_time <= 180.0)
+    }
+
+    pub fn jack_factor(curr: &ManiaDifficultyObject) -> f64 {
+        let Some(prev) = curr.prev_hit_objects[curr.column]
+            .as_ref()
+            .and_then(Weak::upgrade)
+        else {
+            return 0.0;
+        };
+
+        let interval = curr.start_time - prev.get().start_time;
+
+        if interval > 180.0 {
+            return 0.0;
+        }
+
+        f64::exp(-interval / 180.0)
     }
 }

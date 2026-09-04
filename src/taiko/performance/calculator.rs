@@ -194,6 +194,8 @@ impl TaikoPerformanceCalculator<'_> {
             f64::powf(base_difficulty, 2.25) / 1250.0,
         );
 
+        difficulty_value *= self.rake_penalty();
+
         difficulty_value *= 1.0 + 0.10 * f64::max(0.0, self.attrs.stars - 10.0);
         let length_bonus = 1.0 + 0.25 * total_difficult_hits / (total_difficult_hits + 4000.0);
         difficulty_value *= length_bonus;
@@ -252,6 +254,33 @@ impl TaikoPerformanceCalculator<'_> {
         difficulty_value
             * (erf(mono_acc_scaling_shift / (f64::sqrt(2.0) * estimated_unstable_rate)))
                 .powf(mono_acc_scaling_exponent)
+    }
+
+    fn rake_penalty(&self) -> f64 {
+        if self.attrs.stamina <= f64::EPSILON || self.attrs.rake_factor <= f64::EPSILON {
+            return 1.0;
+        }
+
+        let total_hits = self.total_hits();
+        if total_hits <= 0.0 {
+            return 1.0;
+        }
+
+        let accuracy = (f64::from(2 * self.state.hitresults.n300 + self.state.hitresults.n100)
+            / (2.0 * total_hits))
+            .clamp(0.0, 1.0);
+        let miss_ratio = (f64::from(self.state.hitresults.misses) / total_hits).clamp(0.0, 1.0);
+        let combo_ratio = (f64::from(self.state.max_combo) / f64::from(self.attrs.max_combo.max(1)))
+            .clamp(0.0, 1.0);
+
+        // A map can be rake-tappable without every player using that technique.
+        // High accuracy, few misses, and sustained combo are the available
+        // evidence that the score benefited from the easy rake execution.
+        let score_confidence = accuracy.powi(4) * (1.0 - miss_ratio).powi(2) * combo_ratio;
+
+        // At full confidence, a fully rake-like map retains 10% of its
+        // mechanical PP. Poorer scores progressively restore the normal value.
+        1.0 - 0.90 * self.attrs.rake_factor.clamp(0.0, 1.0) * score_confidence
     }
 
     // compute_accuracy_value, compute_deviation_upper_bound, and total_hits remain unchanged

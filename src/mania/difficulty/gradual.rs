@@ -159,6 +159,8 @@ impl Iterator for ManiaGradualDifficulty {
             max_combo: self.note_state.curr_combo,
             n_objects: self.idx as u32,
             n_hold_notes: self.note_state.n_hold_notes,
+            jack_ratio: self.strain.jack_ratio(),
+            jack_factor: self.strain.jack_factor(),
             is_convert: self.is_convert,
         })
     }

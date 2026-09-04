@@ -214,7 +214,7 @@ fn detect_nx_pattern<'a>(
 }
 
 impl AimRxEvaluator {
-    // Recalibrated constants to produce akat-equivalent pp output.
+    // Recalibrated constants to produce skill-equivalent pp output.
     const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
     const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
     const SLIDER_MULTIPLIER: f64 = 1.03;
@@ -222,25 +222,10 @@ impl AimRxEvaluator {
     const WIGGLE_MULTIPLIER: f64 = 1.02;
     const AIM_CALIBRATION: f64 = 0.92;
 
-    // New Thresholds for Stacks/Dense
+    // Stack and flow spacing thresholds. Small jumps must not be mistaken for
+    // flow, even when their rhythm is fast and regular.
     const PSEUDO_STACK_THRESHOLD: f64 = 10.0;
-    const DENSE_SPACING_THRESHOLD: f64 = 45.0;
-
-    // ── Stream-density nerf (CC V3) ─────────────────────────────────
-    // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
-    // maps (high-BPM symphonic/speedcore streams) are pure tapping in vanilla
-    // but become huge "aim" pp under RX where the tapping is free. The nerf
-    // keys off effective stream BPM (from adjusted_delta_time) and spacing
-    // (lazy_jump_dist): a note only counts as farm-stream when it is BOTH fast
-    // AND tightly spaced, so genuine jump/flow aim (large spacing) is untouched.
-    //
-    // ramp from no nerf at STREAM_BPM_MIN up to full at STREAM_BPM_MAX, gated
-    // by a spacing window that fades the nerf out once notes are jump-spaced.
-    const STREAM_BPM_MIN: f64 = 200.0; // below this eff-BPM: no stream nerf
-    const STREAM_BPM_MAX: f64 = 280.0; // at/above this: full BPM weight
-    const STREAM_DIST_FULL: f64 = 80.0; // <= this spacing (px): full nerf weight
-    const STREAM_DIST_EXEMPT: f64 = 170.0; // >= this spacing: exempt (real jumps)
-    const STREAM_MAX_NERF: f64 = 0.55; // up to 55% strain removed on the worst streams
+    const DENSE_SPACING_THRESHOLD: f64 = 55.0;
 
     // ── Stream-signature tech-buff gate (CC V3) ─────────────────────
     // A "stream signature" is a consistent, fast 1/4 RHYTHM — regardless of
@@ -267,9 +252,10 @@ impl AimRxEvaluator {
     const FLOW_MIN_EFF_BPM: f64 = 210.25;
     const FLOW_MEAN_ANGLE_THRESHOLD: f64 = 2.0;
     const FLOW_STDDEV_THRESHOLD: f64 = 0.3;
-    const FLOW_MAX_NERF: f64 = 0.50;
-    const FLOW_DIST_FULL_NERF: f64 = 50.0;
-    const FLOW_DIST_EXEMPT: f64 = 97.0;
+    const FLOW_MAX_NERF: f64 = 0.70;
+    const FLOW_DIST_MIN: f64 = 55.0;
+    const FLOW_DIST_FULL: f64 = 90.0;
+    const FLOW_DIST_EXEMPT: f64 = 150.0;
 
     #[warn(dead_code)]
     const NX_MAX_NERF: f64 = 0.30;
@@ -335,6 +321,62 @@ impl AimRxEvaluator {
         Self::NEUTRAL_FLOW_DIST_RANGES.iter().any(|&(low, high)| {
             dist_mean >= low && dist_mean <= high
         })
+    }
+
+    fn combined_flow_nerf<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+    ) -> f64 {
+        let transition = if curr.lazy_jump_dist > Self::PSEUDO_STACK_THRESHOLD
+            && curr.lazy_jump_dist <= Self::DENSE_SPACING_THRESHOLD
+            && curr
+                .previous(0, diff_objects)
+                .is_some_and(|prev| prev.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD)
+        {
+            0.35 * (curr.circle_radius / 36.0).clamp(0.2, 1.0)
+        } else {
+            0.0
+        };
+
+        let (angle_mean, angle_stddev, angle_n) =
+            windowed_angle_stats(curr, diff_objects, ANGLE_WINDOW);
+        let (dist_mean, dist_stddev, dist_n) =
+            windowed_dist_stats(curr, diff_objects, ANGLE_WINDOW);
+
+        if angle_n < 4 || dist_n < 4 || dist_mean < Self::FLOW_DIST_MIN {
+            return Self::FLOW_MAX_NERF * transition;
+        }
+
+        let shape = ((angle_mean - Self::FLOW_MEAN_ANGLE_THRESHOLD)
+            / (PI - Self::FLOW_MEAN_ANGLE_THRESHOLD))
+            .clamp(0.0, 1.0)
+            * (1.0 - (angle_stddev / Self::FLOW_STDDEV_THRESHOLD).clamp(0.0, 1.0)).powi(2);
+
+        let distance_gate = smoothstep(dist_mean, Self::FLOW_DIST_MIN, Self::FLOW_DIST_FULL);
+        let distance_consistency =
+            (1.0 - (dist_stddev / dist_mean / 0.25).clamp(0.0, 1.0)).max(0.0);
+        let flow_shape = shape * distance_gate * distance_consistency;
+
+        let bpm = milliseconds_to_bpm(curr.adjusted_delta_time, None);
+        let dense_rhythm = reverse_lerp(bpm, Self::FLOW_MIN_EFF_BPM, 360.0)
+            * reverse_lerp(dist_mean, Self::FLOW_DIST_MIN, Self::FLOW_DIST_EXEMPT);
+
+        let washing_machine = flow_shape
+            * (1.0 - (angle_stddev / 0.12).clamp(0.0, 1.0))
+            * (1.0 - (dist_stddev / dist_mean / 0.08).clamp(0.0, 1.0));
+
+        // Very fast, evenly spaced flow is usually less aim-relevant under RX.
+        // Preserve a strong penalty only for highly circular repetition.
+        let fast_regular_flow = reverse_lerp(bpm, 280.0, 400.0)
+            * distance_consistency
+            * (1.0 - washing_machine);
+        let speed_adjustment = (1.0 - 0.75 * fast_regular_flow).clamp(0.25, 1.0);
+
+        let severity = (flow_shape.max(dense_rhythm * flow_shape) * speed_adjustment)
+            .max(transition)
+            .clamp(0.0, 1.0);
+
+        Self::FLOW_MAX_NERF * severity
     }
 
     // Farm streak considers all farm-related nerfs (N/X, slop, cross-screen).
@@ -626,24 +668,18 @@ impl AimRxEvaluator {
             return 0.0;
         }
 
-        // Stack to dense transitions and precision scaling
-        // Note: Precision scaling probably needs changed to correctly work
         let precision_scaler = (osu_curr_obj.circle_radius / 36.0).clamp(0.2, 1.0);
-        if osu_last_obj.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD 
-            && osu_curr_obj.lazy_jump_dist <= Self::DENSE_SPACING_THRESHOLD 
-        {
-            aim_strain *= 1.0 - (0.4 * precision_scaler);
-        }
+
+        // Stack-to-dense transitions are included in the combined flow nerf.
 
         let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
         let no_followpoint_streak =
             Self::recent_no_followpoint_streak(osu_curr_obj, diff_objects, 6);
-        let is_flow_candidate = eff_bpm > Self::FLOW_MIN_EFF_BPM && no_followpoint_streak >= 6;
         let skip_farm_detection = no_followpoint_streak < 6;
 
         let mut cross_screen_nerf = 0.0;
-        let mut flow_nerf = 0.0;
-        let mut flow_active = false;
+        let flow_nerf = Self::combined_flow_nerf(osu_curr_obj, diff_objects);
+        let flow_active = flow_nerf > 0.0;
 
         // ── N/X alternating pattern severity ─────────────────────────────
         let nx_severity = if !skip_farm_detection {
@@ -725,47 +761,6 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Extreme flow aim nerf (distance-gated) ──────────────────
-        if is_flow_candidate {
-            let (flow_mean, flow_stddev, flow_n) =
-                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-            if flow_n >= 4 {
-                let mean_ok = flow_mean >= Self::FLOW_MEAN_ANGLE_THRESHOLD;
-                let stddev_ok = flow_stddev <= Self::FLOW_STDDEV_THRESHOLD;
-
-                if mean_ok && stddev_ok {
-                    let stddev_severity =
-                        (1.0 - (flow_stddev / Self::FLOW_STDDEV_THRESHOLD)).powi(2);
-                    let mean_range = PI - Self::FLOW_MEAN_ANGLE_THRESHOLD;
-                    let mean_severity = ((flow_mean - Self::FLOW_MEAN_ANGLE_THRESHOLD)
-                        / mean_range)
-                        .clamp(0.0, 1.0);
-                    let angle_severity = stddev_severity * mean_severity;
-
-                    let (avg_dist, _, dist_n) =
-                        windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-                    let dist_factor = if dist_n < 3 {
-                        0.5
-                    } else if avg_dist <= Self::FLOW_DIST_FULL_NERF {
-                        1.0
-                    } else if avg_dist >= Self::FLOW_DIST_EXEMPT {
-                        0.0
-                    } else {
-                        1.0 - ((avg_dist - Self::FLOW_DIST_FULL_NERF)
-                            / (Self::FLOW_DIST_EXEMPT - Self::FLOW_DIST_FULL_NERF))
-                    };
-
-                    let combined = angle_severity * dist_factor;
-                    flow_nerf = Self::FLOW_MAX_NERF * combined;
-                    if flow_nerf > 0.0 {
-                        flow_active = true;
-                    }
-                }
-            }
-        }
-
         let mut tech_boost = 0.0;
         let mut hybrid_boost = 0.0;
 
@@ -805,11 +800,8 @@ impl AimRxEvaluator {
 
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
-        if flow_active {
-            aim_strain *= 0.95 - flow_nerf;
-        } else {
-            aim_strain *= 1.15 - farm_nerf;
-
+        aim_strain *= 1.15 - farm_nerf;
+        if !flow_active {
             // Delayed tech buff after farm + neutral pattern protection + overall cap
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
                 && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects)
@@ -821,21 +813,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Stream-density nerf ─────────────────────────────────────
-        // Fast + tightly-spaced => farm stream under RX. Both conditions
-        // required, so jump-spaced aim at the same BPM is unaffected.
-        if osu_curr_obj.adjusted_delta_time > 0.0 {
-            let eff_bpm = milliseconds_to_bpm(osu_curr_obj.adjusted_delta_time, None);
-            let bpm_weight = reverse_lerp(eff_bpm, Self::STREAM_BPM_MIN, Self::STREAM_BPM_MAX);
-            if bpm_weight > 0.0 {
-                // 1.0 at/under STREAM_DIST_FULL, fading to 0.0 at STREAM_DIST_EXEMPT.
-                let dist = osu_curr_obj.lazy_jump_dist;
-                let dist_weight = 1.0
-                    - reverse_lerp(dist, Self::STREAM_DIST_FULL, Self::STREAM_DIST_EXEMPT);
-                let stream_severity = bpm_weight * dist_weight;
-                aim_strain *= 0.92 - Self::STREAM_MAX_NERF * stream_severity;
-            }
-        }
+        aim_strain *= 1.0 - flow_nerf; // NOTE: Haven't tested new flow nerf so this may need to be decreased to 0.95 or so to avoid overweight flow aim.
 
         // ── Akat calibration ────────────────────────────────────────
         aim_strain *= Self::AIM_CALIBRATION;
