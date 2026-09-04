@@ -87,7 +87,54 @@ fn calculate_difficulty(difficulty: &Difficulty, map: &Beatmap) -> TaikoDifficul
 
     DifficultyValues::eval(&mut attrs, skills, is_relax);
 
+    attrs.rake_factor = calculate_rake_factor(&map, difficulty);
+
     attrs
+}
+
+fn calculate_rake_factor(map: &Beatmap, difficulty: &Difficulty) -> f64 {
+    // Rake tapping is most effective when same-color hits are packed into
+    // roughly 600-1000 BPM intervals. Short patterns are ignored by the
+    // saturation below so an isolated burst does not define the whole map.
+    let clock_rate = difficulty.get_clock_rate();
+    let mut high_speed = 0usize;
+    let mut mono_high_speed = 0usize;
+    let mut previous_type = None;
+    let mut previous_time = None;
+
+    for (hit_object, hit_sound) in map.hit_objects.iter().zip(map.hit_sounds.iter()) {
+        let object_type = TaikoObject::new(hit_object, *hit_sound).hit_type;
+        let Some(previous_timestamp) = previous_time else {
+            previous_time = Some(hit_object.start_time);
+            previous_type = Some(object_type);
+            continue;
+        };
+
+        let delta = (hit_object.start_time - previous_timestamp) / clock_rate;
+        let bpm = 60_000.0 / delta.max(1.0);
+
+        if (600.0..=1000.0).contains(&bpm)
+            && object_type.is_hit()
+            && previous_type.is_some_and(|hit_type| hit_type.is_hit())
+        {
+            high_speed += 1;
+            if previous_type == Some(object_type) {
+                mono_high_speed += 1;
+            }
+        }
+
+        previous_time = Some(hit_object.start_time);
+        previous_type = Some(object_type);
+    }
+
+    if high_speed == 0 {
+        return 0.0;
+    }
+
+    let high_speed_ratio = mono_high_speed as f64 / high_speed as f64;
+    let length_factor = (high_speed as f64 / 32.0).min(1.0);
+
+    high_speed_ratio * length_factor
 }
 
 /// Returns the combined rating and the consistency factor

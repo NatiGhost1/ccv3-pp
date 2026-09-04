@@ -1,7 +1,7 @@
 use crate::{
     any::difficulty::{
         object::{HasStartTime, IDifficultyObject},
-        skills::{StrainSkill, strain_decay},
+        skills::{strain_decay, StrainSkill},
     },
     osu::difficulty::{
         evaluators::{RhythmEvaluator, SpeedEvaluator},
@@ -60,6 +60,10 @@ impl Speed {
         if self.has_autopilot_mod {
             speed_eval *= 1.25;
             rhythm_eval *= 1.25;
+        }
+
+        if !self.has_autopilot_mod {
+            speed_eval *= RhythmEvaluator::speed_slop_multiplier(curr, objects);
         }
 
         self.current_strain += speed_eval * Self::SKILL_MULTIPLIER;

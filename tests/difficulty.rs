@@ -144,6 +144,7 @@ macro_rules! test_cases {
             n_hold_notes: $n_hold_notes,
             max_combo: $max_combo,
             is_convert: $is_convert,
+            ..Default::default()
         }
     }
 }
@@ -532,7 +533,7 @@ fn basic_mania() {
                 is_convert: false,
             };
             DT => {
-                stars: 4.6072892053157295,
+                stars: 5.280587627407447,
                 n_objects: 594,
                 n_hold_notes: 121,
                 max_combo: 956,
@@ -547,14 +548,14 @@ fn convert_mania() {
     test_cases! {
         Mania: OSU {
             NM => {
-                stars: 3.2033142085672255,
+                stars: 3.5103081984986257,
                 n_objects: 1046,
                 n_hold_notes: 266,
                 max_combo: 1381,
                 is_convert: true,
             };
             DT => {
-                stars: 4.2934063021960185,
+                stars: 4.810254588823134,
                 n_objects: 1046,
                 n_hold_notes: 266,
                 max_combo: 1381,
@@ -712,6 +713,7 @@ impl AssertEq for ManiaDifficultyAttributes {
             n_hold_notes,
             max_combo,
             is_convert,
+            ..
         } = self;
 
         assert_eq_float(*stars, expected.stars);

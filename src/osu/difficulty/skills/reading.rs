@@ -114,8 +114,19 @@ impl Reading {
         let slow_map = bpm < 200.0;
         let ar = approach_rate.clamp(0.0, 10.0);
         let map_length_factor = (objects.len() as f64 / 300.0).clamp(0.0, 2.2);
+        let time_preempt = if approach_rate < 5.0 {
+            1800.0 - 120.0 * approach_rate
+        } else {
+            1200.0 - 150.0 * (approach_rate - 5.0)
+        }
+        .clamp(450.0, 1800.0);
+        let memory_only = Self::all_objects_visible(objects, time_preempt);
+        let visible_objects = Self::visible_object_count(curr, objects, time_preempt);
+        let screen_density = (visible_objects as f64 / 4.0).clamp(0.75, 3.0);
 
         let mut pattern_pressure = 0.0;
+        let mut speed_variety = 0.0;
+        let mut distance_pressure = 0.0;
 
         if curr.idx > 0 {
             let previous = curr.previous(0, objects).map(|p| p.base).unwrap_or(curr.base);
@@ -127,6 +138,11 @@ impl Reading {
                 .max(1.0);
             let rhythm_change = ((curr.delta_time / previous_delta).ln().abs() / 2.0).clamp(0.0, 1.0);
             let angle_pressure = curr.angle.unwrap_or(0.0).abs() / std::f64::consts::PI;
+            let jump_speed = jump / delta_time;
+
+            speed_variety = rhythm_change;
+            distance_pressure = (jump / 100.0).clamp(0.0, 1.5)
+                * (1.0 + (jump_speed / 0.8).clamp(0.0, 1.0));
 
             pattern_pressure = (jump / 160.0).clamp(0.0, 1.4)
                 + rhythm_change * 1.1
@@ -152,7 +168,11 @@ impl Reading {
             0.0
         };
 
-        let memory_blend = (low_ar_memory.clamp(0.0, 2.5) / 2.5).powi(2);
+        let memory_blend = if memory_only {
+            1.0
+        } else {
+            (low_ar_memory.clamp(0.0, 2.5) / 2.5).powi(2)
+        };
 
         // Keep the easier end of the AR curve from being overstated on 200 BPM and below maps.
         let ar_hardness = if ar < 2.0 {
@@ -170,7 +190,11 @@ impl Reading {
             0.65 + 0.15 * (ar / 8.5)
         };
 
-        let density_pressure = density * (0.18 + 0.72 * ar_hardness);
+        let density_pressure = if memory_only {
+            0.0
+        } else {
+            density * (0.18 + 0.72 * ar_hardness)
+        };
         let pattern_factor = pattern_pressure * (0.75 + 0.9 * memory_blend + 0.45 * ar_hardness);
 
         let local_repeat_pressure = {
@@ -200,16 +224,81 @@ impl Reading {
         };
 
         let mut readability = (density_pressure + pattern_factor)
+            * screen_density
+            * (1.0 + speed_variety * 0.8 + distance_pressure * 0.35)
             * (1.0 + 0.65 * memory_blend)
             * high_ar_nerf;
 
         readability *= 1.0 - (local_repeat_pressure * 0.9);
+
+        let mut previous_delta = delta_time;
+        for i in 0..4 {
+            let Some(previous) = curr.previous(i, objects) else {
+                break;
+            };
+
+            speed_variety += ((previous.delta_time.max(1.0) / previous_delta).ln().abs() / 2.0)
+                .clamp(0.0, 1.0);
+            previous_delta = previous.delta_time.max(1.0);
+        }
+        speed_variety = (speed_variety / 5.0).clamp(0.0, 1.0);
+
+        let ar_hardness = (8.0 - approach_rate.clamp(0.0, 10.0)).clamp(0.0, 8.0) / 8.0;
+        let memory_blend = if memory_only {
+            1.0
+        } else {
+            (1.0 - (approach_rate / 7.0).clamp(0.0, 1.0)).powi(2)
+        };
+        let density_pressure = if memory_only {
+            0.0
+        } else {
+            density * (0.35 + 0.65 * ar_hardness)
+        };
+        let pattern_factor = pattern_pressure * (0.9 + 0.8 * memory_blend);
+        let screen_pattern_factor = screen_density
+            * (1.0 + speed_variety * 0.8 + distance_pressure * 0.35);
+
+        let mut readability = (density_pressure + pattern_factor) * screen_pattern_factor
+            * (1.0 + memory_blend * 0.7);
 
         if hidden {
             readability *= 1.08;
         }
 
         readability / 6.0
+    }
+
+    fn visible_object_count(
+        curr: &OsuDifficultyObject<'_>,
+        objects: &[OsuDifficultyObject<'_>],
+        time_preempt: f64,
+    ) -> usize {
+        let mut count = 1;
+
+        for i in 0..curr.idx {
+            let Some(previous) = curr.previous(i, objects) else {
+                break;
+            };
+
+            if curr.start_time - previous.start_time > time_preempt {
+                break;
+            }
+
+            count += 1;
+        }
+
+        count
+    }
+
+    fn all_objects_visible(objects: &[OsuDifficultyObject<'_>], time_preempt: f64) -> bool {
+        let Some(first) = objects.first() else {
+            return false;
+        };
+        let Some(last) = objects.last() else {
+            return false;
+        };
+
+        last.start_time - first.start_time <= time_preempt
     }
 
     pub fn difficulty(&self) -> f64 {

@@ -51,12 +51,15 @@ fn calculate_difficulty(difficulty: &Difficulty, map: &Beatmap) -> ManiaDifficul
     let n_objects = cmp::min(difficulty.get_passed_objects(), map.hit_objects.len()) as u32;
 
     let values = DifficultyValues::calculate(difficulty, map);
+    let stars = values.strain.cloned_difficulty_value() * DIFFICULTY_MULTIPLIER;
 
     ManiaDifficultyAttributes {
-        stars: values.strain.into_difficulty_value() * DIFFICULTY_MULTIPLIER,
+        stars,
         max_combo: values.max_combo,
         n_objects,
         n_hold_notes: values.n_hold_notes,
+        jack_ratio: values.strain.jack_ratio(),
+        jack_factor: values.strain.jack_factor(),
         is_convert: map.is_convert,
     }
 }

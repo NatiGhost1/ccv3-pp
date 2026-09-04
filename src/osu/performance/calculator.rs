@@ -559,14 +559,18 @@ impl OsuPerformanceCalculator<'_> {
         }
 
         let mut flashlight_value = Flashlight::difficulty_to_performance(self.attrs.flashlight);
-        let memory_value = Memory::performance_value(
-            self.attrs.memory,
-            self.acc,
-            f64::from(self.state.max_combo),
-            f64::from(self.attrs.max_combo),
-            effective_miss_count,
-            self.total_hits(),
-        );
+        let memory_value = if self.mods.ap() {
+            0.0
+        } else {
+            Memory::performance_value(
+                self.attrs.memory,
+                self.acc,
+                f64::from(self.state.max_combo),
+                f64::from(self.attrs.max_combo),
+                effective_miss_count,
+                self.total_hits(),
+            )
+        };
         flashlight_value = (flashlight_value.powf(1.1) + memory_value.powf(1.1)).powf(1.0 / 1.1);
 
         let total_hits = self.total_hits();
