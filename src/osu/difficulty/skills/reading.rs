@@ -8,6 +8,7 @@ use crate::{
 
 use super::strain::OsuStrainSkill;
 
+/// Skill struct for evaluating the reading difficulty of an osu! beatmap.
 #[derive(Clone)]
 pub struct Reading {
     enabled: bool,
@@ -21,14 +22,19 @@ pub struct Reading {
     current_section_end: f64,
 }
 
+/// Measures pattern repetition in recent hit objects to suppress strain on repetitive 1-2 jumps or simple rhythms.
+/// - Calculates variation in timing (deltas) and spacing (jumps).
+/// - Higher stability (lower variation) and high rhythm alternation trigger higher suppression.
 fn repetition_pressure(deltas: &[f64], jumps: &[f64]) -> f64 {
     if deltas.is_empty() || jumps.is_empty() {
         return 0.0;
     }
 
+    // Average time delta between objects and average jump distance
     let average_delta = deltas.iter().copied().sum::<f64>() / deltas.len() as f64;
     let average_jump = jumps.iter().copied().sum::<f64>() / jumps.len() as f64;
 
+    // Calculate mean absolute deviation for deltas and jumps
     let delta_variation = deltas
         .iter()
         .map(|delta| (*delta - average_delta).abs())
@@ -40,11 +46,13 @@ fn repetition_pressure(deltas: &[f64], jumps: &[f64]) -> f64 {
         .sum::<f64>()
         / jumps.len() as f64;
 
+    // Measure stability: 1.0 means perfectly uniform spacing/timing, 0.0 means highly chaotic
     let delta_stability = 1.0
         - (delta_variation / average_delta.clamp(1.0, f64::INFINITY)).clamp(0.0, 1.0);
     let jump_stability = 1.0
         - (jump_variation / average_jump.clamp(1.0, f64::INFINITY)).clamp(0.0, 1.0);
 
+    // Calculate rhythm alternation frequency across consecutive pairs
     let alternating = if deltas.len() > 1 {
         let alternation_count = deltas
             .windows(2)
@@ -55,6 +63,7 @@ fn repetition_pressure(deltas: &[f64], jumps: &[f64]) -> f64 {
         0.0
     };
 
+    // Combine stability and alternation metrics into a final suppression factor (0.0 to 1.0)
     ((0.65 * delta_stability + 0.35 * jump_stability) * (0.55 + 0.45 * alternating)).clamp(0.0, 1.0)
 }
 
@@ -76,6 +85,7 @@ impl Reading {
     const SKILL_MULTIPLIER: f64 = 1.75;
     const STRAIN_DECAY_BASE: f64 = 0.15;
 
+    /// Decays strain across section boundaries based on elapsed time from previous object.
     fn calculate_initial_strain(
         &mut self,
         time: f64,
@@ -89,6 +99,7 @@ impl Reading {
         self.current_strain * strain_decay(time - prev_start_time, Self::STRAIN_DECAY_BASE)
     }
 
+    /// Processes an object: decays existing strain over delta_time and accumulates new readability strain.
     fn strain_value_at(
         &mut self,
         curr: &OsuDifficultyObject<'_>,
@@ -102,54 +113,69 @@ impl Reading {
         self.current_strain
     }
 
+    /// Core reading evaluation function for a single object.
     fn evaluate_reading_diff_of(
         curr: &OsuDifficultyObject<'_>,
         objects: &[OsuDifficultyObject<'_>],
         approach_rate: f64,
         hidden: bool,
     ) -> f64 {
+        // Basic Timing & Object Preempt Setup
         let delta_time = curr.delta_time.max(1.0);
         let density = (1000.0 / delta_time).clamp(0.0, 30.0);
         let bpm = 60_000.0 / delta_time;
         let slow_map = bpm < 200.0;
         let ar = approach_rate.clamp(0.0, 10.0);
-        let map_length_factor = (objects.len() as f64 / 300.0).clamp(0.0, 2.2);
+
+        // Preempt time (how long an object is visible on screen before click)
         let time_preempt = if approach_rate < 5.0 {
             1800.0 - 120.0 * approach_rate
         } else {
             1200.0 - 150.0 * (approach_rate - 5.0)
         }
         .clamp(450.0, 1800.0);
-        let memory_only = Self::all_objects_visible(objects, time_preempt);
+
+        // Calculate visual object density on screen
         let visible_objects = Self::visible_object_count(curr, objects, time_preempt);
         let screen_density = (visible_objects as f64 / 4.0).clamp(0.75, 3.0);
 
+        // Spatial & Pattern Movement Analysis
+        let mut jump = 0.0;
         let mut pattern_pressure = 0.0;
         let mut speed_variety = 0.0;
         let mut distance_pressure = 0.0;
 
         if curr.idx > 0 {
             let previous = curr.previous(0, objects).map(|p| p.base).unwrap_or(curr.base);
-            let jump = f64::from((curr.base.stacked_pos() - previous.stacked_pos()).length());
+            
+            // Distance between current and previous note center
+            jump = f64::from((curr.base.stacked_pos() - previous.stacked_pos()).length());
+            
             let previous_delta = curr
                 .previous(1, objects)
                 .map(|p| p.delta_time)
                 .unwrap_or(curr.delta_time)
                 .max(1.0);
+            
+            // Rhythm change metric (ratio of consecutive delta times)
             let rhythm_change = ((curr.delta_time / previous_delta).ln().abs() / 2.0).clamp(0.0, 1.0);
             let angle_pressure = curr.angle.unwrap_or(0.0).abs() / std::f64::consts::PI;
             let jump_speed = jump / delta_time;
 
             speed_variety = rhythm_change;
+            
+            // Distance pressure accounts for high-velocity cursor movements
             distance_pressure = (jump / 100.0).clamp(0.0, 1.5)
                 * (1.0 + (jump_speed / 0.8).clamp(0.0, 1.0));
 
+            // Pattern pressure considers spatial distance, rhythm changes, and sharp angle changes
             pattern_pressure = (jump / 160.0).clamp(0.0, 1.4)
                 + rhythm_change * 1.1
                 + angle_pressure * 0.9;
         }
 
-        // Higher ARs are easier to read, especially on slower maps where the timing window is not as punishing.
+        // Approach Rate (AR) Hardness & Adjustments
+        // High AR (>= 8.5) is easier to read due to lower visual clutter
         let high_ar_nerf = if ar >= 8.5 {
             let peak = ((ar - 8.5) / 1.5).clamp(0.0, 1.0);
             let slow_map_bonus = if slow_map { 1.0 } else { 0.7 };
@@ -158,23 +184,7 @@ impl Reading {
             1.0
         };
 
-        // Low AR memory is dominated by map length and pattern retention, not raw BPM.
-        // Faster maps still get a bit more exposure, but length is the main driver.
-        let low_ar_memory = if !hidden && ar < 2.0 {
-            let low_ar_factor = (2.0 - ar) / 2.0;
-            let speed_pressure = (bpm / 200.0).clamp(0.0, 1.0) * 0.25;
-            low_ar_factor * (map_length_factor + 0.3 + speed_pressure)
-        } else {
-            0.0
-        };
-
-        let memory_blend = if memory_only {
-            1.0
-        } else {
-            (low_ar_memory.clamp(0.0, 2.5) / 2.5).powi(2)
-        };
-
-        // Keep the easier end of the AR curve from being overstated on 200 BPM and below maps.
+        // AR hardness weighting across low and high AR spectrums
         let ar_hardness = if ar < 2.0 {
             let low_ar_factor = (2.0 - ar) / 2.0;
             0.6 * low_ar_factor * if slow_map { 0.2 } else { 1.0 }
@@ -190,13 +200,21 @@ impl Reading {
             0.65 + 0.15 * (ar / 8.5)
         };
 
-        let density_pressure = if memory_only {
-            0.0
-        } else {
-            density * (0.18 + 0.72 * ar_hardness)
-        };
-        let pattern_factor = pattern_pressure * (0.75 + 0.9 * memory_blend + 0.45 * ar_hardness);
+        // NOTE: Memory Factor Removal & Flow Aim Density Scaling 
+        // [REMOVED]: `low_ar_memory` and `memory_blend` (previously used map length factor and AR retention to scale reading).
+        // Reason: Completely removes memory factor from reading difficulty calculation.
 
+        // [ADDED]: `jump_scaling` gates density pressure by physical jump distance.
+        // - Small spacing (flow aim, stream patterns): jump_scaling -> 0.0, heavily suppressing density reward.
+        // - Large spacing (wide jumps): jump_scaling -> 1.0, allowing density pressure to fully take effect.
+        let jump_scaling = (jump / 120.0).clamp(0.0, 1.0);
+        let density_pressure = density * (0.18 + 0.72 * ar_hardness) * jump_scaling;
+
+        // Pattern factor combines geometric complexity with AR reading difficulty
+        let pattern_factor = pattern_pressure * (0.75 + 0.45 * ar_hardness);
+
+        // Repetition Suppression
+        // Look back at the last 8 objects to detect repetitive flow/jump patterns
         let local_repeat_pressure = {
             let lookback = (curr.idx.saturating_sub(8)).min(objects.len().saturating_sub(1));
             let recent_deltas: Vec<f64> = (0..=lookback)
@@ -223,44 +241,16 @@ impl Reading {
             repetition_pressure(&recent_deltas, &recent_jumps)
         };
 
+        // Readability Strain Aggregation
         let mut readability = (density_pressure + pattern_factor)
             * screen_density
             * (1.0 + speed_variety * 0.8 + distance_pressure * 0.35)
-            * (1.0 + 0.65 * memory_blend)
             * high_ar_nerf;
 
+        // Apply repetition suppression discount (up to 90% strain reduction for highly predictable repetition)
         readability *= 1.0 - (local_repeat_pressure * 0.9);
 
-        let mut previous_delta = delta_time;
-        for i in 0..4 {
-            let Some(previous) = curr.previous(i, objects) else {
-                break;
-            };
-
-            speed_variety += ((previous.delta_time.max(1.0) / previous_delta).ln().abs() / 2.0)
-                .clamp(0.0, 1.0);
-            previous_delta = previous.delta_time.max(1.0);
-        }
-        speed_variety = (speed_variety / 5.0).clamp(0.0, 1.0);
-
-        let ar_hardness = (8.0 - approach_rate.clamp(0.0, 10.0)).clamp(0.0, 8.0) / 8.0;
-        let memory_blend = if memory_only {
-            1.0
-        } else {
-            (1.0 - (approach_rate / 7.0).clamp(0.0, 1.0)).powi(2)
-        };
-        let density_pressure = if memory_only {
-            0.0
-        } else {
-            density * (0.35 + 0.65 * ar_hardness)
-        };
-        let pattern_factor = pattern_pressure * (0.9 + 0.8 * memory_blend);
-        let screen_pattern_factor = screen_density
-            * (1.0 + speed_variety * 0.8 + distance_pressure * 0.35);
-
-        let mut readability = (density_pressure + pattern_factor) * screen_pattern_factor
-            * (1.0 + memory_blend * 0.7);
-
+        // Minor reading difficulty boost if Hidden (HD) mod is active
         if hidden {
             readability *= 1.08;
         }
@@ -268,6 +258,7 @@ impl Reading {
         readability / 6.0
     }
 
+    /// Returns the number of objects currently visible on screen within the approach rate preempt window.
     fn visible_object_count(
         curr: &OsuDifficultyObject<'_>,
         objects: &[OsuDifficultyObject<'_>],
@@ -290,17 +281,7 @@ impl Reading {
         count
     }
 
-    fn all_objects_visible(objects: &[OsuDifficultyObject<'_>], time_preempt: f64) -> bool {
-        let Some(first) = objects.first() else {
-            return false;
-        };
-        let Some(last) = objects.last() else {
-            return false;
-        };
-
-        last.start_time - first.start_time <= time_preempt
-    }
-
+    /// Aggregates peak strains into a single overall difficulty rating.
     pub fn difficulty(&self) -> f64 {
         if !self.enabled {
             return 0.0;
@@ -310,11 +291,13 @@ impl Reading {
         let mut difficulty = 0.0;
         let mut weight = 1.0;
 
+        // Top-weighted decay sum (0.9 decay factor per peak)
         for peak in peaks.iter().filter(|p| **p > 0.0).copied().collect::<Vec<_>>() {
             difficulty += peak * weight;
             weight *= 0.9;
         }
 
+        // Apply multiplier if Easy (EZ) mod is active
         if self.easy {
             difficulty *= 0.72;
         }
