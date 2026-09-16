@@ -340,7 +340,7 @@ impl AimEvaluator {
 
                         // Harsher nerf on continuous vanilla flow:
                         // Base nerf scales smoothly upward as flow pattern duration increases.
-                        let progressive_flow_nerf = 0.75 * predictability * flow_streak;
+                        let progressive_flow_nerf = 0.75 * predictability * flow_streak; // [ALT FORMULA]: let progessive_flow_nerf = 0.65 * predictability * flow_streak;
                         wide_penalty += progressive_flow_nerf;
                     }
                 }
