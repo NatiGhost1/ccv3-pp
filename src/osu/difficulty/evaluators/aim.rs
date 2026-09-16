@@ -12,6 +12,7 @@ pub struct AimEvaluator;
 // ─── Windowed statistics helpers ───────────────
 
 const ANGLE_WINDOW: usize = 8;
+const FLOW_LOOKBACK_WINDOW: usize = 16;
 
 /// Traverses up to `window` past objects to calculate the mean angle, 
 /// standard deviation (variance sqrt), and valid sample count.
@@ -96,9 +97,8 @@ fn windowed_vel_stats<'a>(
     (mean, var.sqrt(), n)
 }
 
-/// Measures how predictable and structured a flow section is.
-/// Smooth, repetitive flow aim gets penalized, but complex technical sections 
-/// are protected by the hard-pattern guard thresholds.
+/// Measures how predictable and structured a single flow section is.
+/// Returns 0.0 instantly if variance thresholds are breached.
 fn flow_pattern_predictability(
     angle_mean: f64,
     angle_stddev: f64,
@@ -107,7 +107,7 @@ fn flow_pattern_predictability(
     vel_mean: f64,
     vel_stddev: f64,
 ) -> f64 {
-    // Flow requires wide, wide-sweeping angles (> 90 degrees / FRAC_PI_2).
+    // Flow requires wide, sweeping angles (> 90 degrees / FRAC_PI_2).
     if angle_mean <= std::f64::consts::FRAC_PI_2 {
         return 0.0;
     }
@@ -127,7 +127,7 @@ fn flow_pattern_predictability(
     };
 
     // HARD-PATTERN GUARD: If angle, distance, or velocity varies too drastically, 
-    // it's a technical section rather than predictable farm flow—skip the nerf.
+    // it's a technical section or jump section—return 0.0 immediately to restore strain.
     if angle_stddev > 0.20 || dist_cv > 0.22 || vel_cv > 0.18 {
         return 0.0;
     }
@@ -136,11 +136,64 @@ fn flow_pattern_predictability(
     let vel_uniformity = (1.0 - (vel_cv / 0.14).clamp(0.0, 1.0)).max(0.0);
     let flow_shape = smoothstep_aim(angle_mean, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
 
-    // Weighted combination of consistency factors
     let predictability = (angle_consistency * 0.5 + dist_uniformity * 0.3 + vel_uniformity * 0.2)
         .clamp(0.0, 1.0);
 
     predictability * flow_shape
+}
+
+/// Scans backwards through historical objects to determine how long a smooth flow 
+/// pattern has continuously persisted.
+/// 
+/// The streak accumulates progressively over uninterrupted flow objects.
+/// As soon as a pattern variation occurs (jumps, acute turns, speed changes),
+/// the loop terminates, resetting the streak and returning full aim strain.
+fn calculate_flow_streak<'a>(
+    curr: &'a OsuDifficultyObject<'a>,
+    diff_objects: &'a [OsuDifficultyObject<'a>],
+    max_lookback: usize,
+) -> f64 {
+    let mut streak: f64 = 0.0;
+
+    for back in 0..max_lookback {
+        let Some(obj) = curr.previous(back, diff_objects) else { break; };
+
+        let (angle_mean, angle_stddev, angle_n) =
+            windowed_angle_stats(obj, diff_objects, ANGLE_WINDOW);
+        let (vel_mean, vel_stddev, vel_n) =
+            windowed_vel_stats(obj, diff_objects, ANGLE_WINDOW);
+
+        if angle_n < 3 || vel_n < 2 {
+            break;
+        }
+
+        let (dist_mean, dist_stddev, dist_n) =
+            windowed_dist_stats(obj, diff_objects, ANGLE_WINDOW);
+
+        if dist_n < 2 {
+            break;
+        }
+
+        let pred = flow_pattern_predictability(
+            angle_mean,
+            angle_stddev,
+            dist_mean,
+            dist_stddev,
+            vel_mean,
+            vel_stddev,
+        );
+
+        // Accumulate flow score if section is predictable.
+        if pred > 0.05 {
+            streak += pred;
+        } else {
+            // Strain Recovery: Pattern broke or varied into jumps/tech—stop accumulating.
+            break;
+        }
+    }
+
+    // Maps streak length (1 to ~12 continuous notes) into a smooth progressive factor [0.0, 1.0].
+    smoothstep_aim(streak, 1.0, 12.0)
 }
 
 impl AimEvaluator {
@@ -259,7 +312,10 @@ impl AimEvaluator {
             // Base penalty for repetitive wide movements
             let mut wide_penalty = rep_strength * 0.7 + wide_rep_raw * 0.3;
 
-            // Apply advanced flow predictability nerf if pattern is highly structured
+            // ── Progressive Flow Decay & Strain Recovery ───────────────────────
+            // Evaluates both single-object predictability and continuous flow duration.
+            // Longer repetitive flow streams build up a higher streak, making the nerf 
+            // progressively harsher (scaling up to 0.75 max decay).
             if angle_n >= 4 && vel_n >= 4 {
                 let (dist_mean, dist_stddev, dist_n) =
                     windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
@@ -275,8 +331,17 @@ impl AimEvaluator {
                     );
 
                     if predictability > 0.0 {
-                        let advanced_flow_nerf = 0.60 * predictability;
-                        wide_penalty += advanced_flow_nerf;
+                        // Calculate how long continuous flow has been sustained
+                        let flow_streak = calculate_flow_streak(
+                            osu_curr_obj,
+                            diff_objects,
+                            FLOW_LOOKBACK_WINDOW,
+                        );
+
+                        // Harsher nerf on continuous vanilla flow:
+                        // Base nerf scales smoothly upward as flow pattern duration increases.
+                        let progressive_flow_nerf = 0.75 * predictability * flow_streak;
+                        wide_penalty += progressive_flow_nerf;
                     }
                 }
             }
