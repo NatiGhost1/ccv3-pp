@@ -9,7 +9,7 @@ use super::{
 pub mod aim;
 pub mod flashlight;
 pub mod memory;
-pub mod reading;
+// pub mod reading;
 pub mod speed;
 pub mod strain;
 
