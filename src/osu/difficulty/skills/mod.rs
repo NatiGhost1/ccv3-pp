@@ -9,6 +9,7 @@ use super::{
 pub mod aim;
 pub mod flashlight;
 pub mod memory;
+pub mod reading;
 pub mod speed;
 pub mod strain;
 
@@ -50,7 +51,7 @@ impl OsuSkills {
         } else {
             Memory::new(mods.hd())
         };
-        let reading = Reading::new(!mods.rx(), mods.ez(), approach_rate, mods.hd());
+        let reading = Reading::with_settings(!mods.rx(), mods.ez(), approach_rate, mods.hd());
 
         Self {
             aim,
@@ -78,7 +79,7 @@ mod tests {
 
     #[test]
     fn reading_skill_stays_off_for_relax() {
-        let reading = Reading::new(false, false, 0.0, false);
+        let reading = Reading::with_settings(false, false, 0.0, false);
         assert_eq!(reading.difficulty(), 0.0);
     }
 }

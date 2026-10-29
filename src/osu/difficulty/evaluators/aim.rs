@@ -310,7 +310,7 @@ impl AimEvaluator {
                 .min(Self::calc_wide_angle_bonus(last_angle).powf(3.0));
             
             // Base penalty for repetitive wide movements
-            let mut wide_penalty = rep_strength * 0.7 + wide_rep_raw * 0.3;
+            let mut wide_penalty = rep_strength * 0.8 + wide_rep_raw * 0.4;
 
             // ── Progressive Flow Decay & Strain Recovery ───────────────────────
             // Evaluates both single-object predictability and continuous flow duration.
@@ -340,7 +340,7 @@ impl AimEvaluator {
 
                         // Harsher nerf on continuous vanilla flow:
                         // Base nerf scales smoothly upward as flow pattern duration increases.
-                        let progressive_flow_nerf = 0.75 * predictability * flow_streak; // [ALT FORMULA]: let progessive_flow_nerf = 0.65 * predictability * flow_streak;
+                        let progressive_flow_nerf = 0.85 * predictability * flow_streak;
                         wide_penalty += progressive_flow_nerf;
                     }
                 }

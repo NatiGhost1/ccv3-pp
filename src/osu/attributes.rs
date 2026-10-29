@@ -128,6 +128,8 @@ pub struct OsuPerformanceAttributes {
     pub pp_flashlight: f64,
     /// The speed portion of the final pp.
     pub pp_speed: f64,
+    /// The reading portion of the final pp.
+    pub pp_reading: f64,
     /// Misses including an approximated amount of slider breaks
     pub effective_miss_count: f64,
     /// Approximated unstable-rate

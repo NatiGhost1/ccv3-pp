@@ -43,8 +43,6 @@ const LOW_UNLUCKY_MULT: f64 = 0.40;
 const LOW_UNLUCKY_MAX_MISSES: u32 = 1;
 const LOW_ACC_OK: f64 = 0.97;
 
-const N100_CAP: u32 = 12;
-const N50_CAP: u32 = 7;
 const VARI_RATIO: f64 = 0.50;
 
 /// Strain-weighted effective miss count for a relax score. This REPLACES the
@@ -129,15 +127,12 @@ pub(crate) fn rx_strain_weighted_misses(
     weighted + count_infl
 }
 
-/// n100/n50 -> effective-miss inflation with hard caps, a variance-aware
+/// n100/n50 -> uncapped effective-miss inflation with variance-aware
 /// soft stop, and OD-scaled severity.
 fn count_inflation(n100: u32, n50: u32, od: f64) -> f64 {
     if n100 == 0 && n50 == 0 {
         return 0.0;
     }
-    let c100 = n100.min(N100_CAP);
-    let c50 = n50.min(N50_CAP);
-
     // Dynamic OD factor centered around OD 10.
     let od_factor = (od / 10.0).max(0.0);
 
@@ -147,8 +142,8 @@ fn count_inflation(n100: u32, n50: u32, od: f64) -> f64 {
     // Cubic scaling for 50s: heavy penalty at high OD (~0.40 misses/50 at OD 10, ~0.50 at OD 11).
     let n50_per = 0.10 + 0.30 * od_factor.powi(3);
 
-    let ratio = if c100 > 0 {
-        f64::from(c50) / f64::from(c100)
+    let ratio = if n100 > 0 {
+        f64::from(n50) / f64::from(n100)
     } else {
         VARI_RATIO * 2.0
     };
@@ -158,5 +153,16 @@ fn count_inflation(n100: u32, n50: u32, od: f64) -> f64 {
         (1.0 - 0.5 * ((ratio - VARI_RATIO) / VARI_RATIO).min(1.0)).max(0.5)
     };
 
-    (f64::from(c100) * n100_per + f64::from(c50) * n50_per) * damp
+    (f64::from(n100) * n100_per + f64::from(n50) * n50_per) * damp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_inflation;
+
+    #[test]
+    fn count_inflation_includes_results_above_old_caps() {
+        assert_eq!(count_inflation(20, 0, 10.0), 3.0);
+        assert_eq!(count_inflation(0, 14, 10.0), 2.8);
+    }
 }

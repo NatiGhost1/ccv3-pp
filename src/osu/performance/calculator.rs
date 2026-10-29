@@ -6,7 +6,7 @@ use crate::{
         OsuDifficultyAttributes, OsuPerformanceAttributes, OsuScoreState,
         difficulty::{
             rating::OsuRatingCalculator,
-            skills::{aim::Aim, flashlight::Flashlight, memory::Memory, speed::Speed, strain::OsuStrainSkill},
+            skills::{aim::Aim, flashlight::Flashlight, memory::Memory, reading::Reading, speed::Speed, strain::OsuStrainSkill},
         },
         legacy_score_miss_calc::OsuLegacyScoreMissCalculator,
     },
@@ -148,11 +148,20 @@ impl OsuPerformanceCalculator<'_> {
         );
         let mut acc_value = self.compute_accuracy_value();
         let mut flashlight_value = self.compute_flashlight_value(penalty_miss_count);
+        let mut reading_value = Reading::performance_value(
+            self.attrs.reading,
+            acc,
+            f64::from(self.state.max_combo),
+            f64::from(self.attrs.max_combo),
+            f64::from(self.state.hitresults.misses),
+            total_hits,
+        );
 
         let mut pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
             + acc_value.powf(1.1)
-            + flashlight_value.powf(1.1))
+            + flashlight_value.powf(1.1)
+            + reading_value.powf(1.1))
         .powf(1.0 / 1.1)
             * multiplier;
 
@@ -178,7 +187,8 @@ impl OsuPerformanceCalculator<'_> {
         pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
             + acc_value.powf(1.1)
-            + flashlight_value.powf(1.1))
+            + flashlight_value.powf(1.1)
+            + reading_value.powf(1.1))
         .powf(1.0 / 1.1)
             * multiplier;
 
@@ -235,6 +245,7 @@ impl OsuPerformanceCalculator<'_> {
         speed_value *= ccv3_scale;
         acc_value *= ccv3_scale;
         flashlight_value *= ccv3_scale;
+        reading_value *= ccv3_scale;
 
         // ── AP standalone miss system ───────────────────────────────
         if self.mods.ap() {
@@ -255,6 +266,7 @@ impl OsuPerformanceCalculator<'_> {
             speed_value *= ap_mult;
             acc_value *= ap_mult;
             flashlight_value *= ap_mult;
+            reading_value *= ap_mult;
         }
 
         // ── RX miss handling ────────────────────────────────────────
@@ -288,13 +300,15 @@ impl OsuPerformanceCalculator<'_> {
             speed_value *= nf_mult;
             acc_value *= nf_mult;
             flashlight_value *= nf_mult;
+            reading_value *= nf_mult;
         }
 
         // Recompute final pp with all nerfs
         pp = (aim_value.powf(1.1)
             + speed_value.powf(1.1)
             + acc_value.powf(1.1)
-            + flashlight_value.powf(1.1))
+            + flashlight_value.powf(1.1)
+            + reading_value.powf(1.1))
         .powf(1.0 / 1.1)
             * multiplier;
 
@@ -304,6 +318,7 @@ impl OsuPerformanceCalculator<'_> {
             pp_aim: aim_value,
             pp_flashlight: flashlight_value,
             pp_speed: speed_value,
+            pp_reading: reading_value,
             pp,
             effective_miss_count,
             speed_deviation,

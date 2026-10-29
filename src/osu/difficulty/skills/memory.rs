@@ -1,6 +1,9 @@
 use crate::osu::difficulty::object::OsuDifficultyObject;
 
-/// Estimates the extra memorization burden created by Flashlight.
+/// Estimates the extra pattern memorization burden created by Flashlight.
+///
+/// Complexity comes from changes in rhythm and position, while repeated
+/// back-and-forth patterns contribute less than less predictable sequences.
 #[derive(Clone, Debug, Default)]
 pub struct Memory {
     enabled: bool,
@@ -42,6 +45,7 @@ impl Memory {
         if let (Some(previous_delta_time), Some(previous_position)) =
             (self.previous_delta_time, self.previous_position)
         {
+            // Normalize timing variation so unusually large rhythm gaps cannot dominate.
             let rhythm_change = (curr.delta_time.max(1.0) / previous_delta_time.max(1.0))
                 .ln()
                 .abs()
@@ -66,12 +70,13 @@ impl Memory {
                     let dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
                     // Dot product approaches -1.0 for perfect 1-2 reversals.
                     if dot < 0.0 {
-                        // Max nerf of 0.5 for a perfect 180-degree turnaround
+                        // Reduce the transition's complexity by up to half for a reversal.
                         repetition_nerf = 1.0 - (dot.abs() * 0.5);
                     }
                 }
             }
 
+            // Timing changes matter slightly more than spacing changes in this estimate.
             self.pattern_complexity += (0.6 * rhythm_change + 0.4 * spatial_change) * repetition_nerf;
         }
 
@@ -82,14 +87,16 @@ impl Memory {
     }
 
     pub fn difficulty(self) -> f64 {
+        // Avoid assigning a meaningful memory rating to very short maps.
         if !self.enabled || self.object_count < 100 {
             return 0.0;
         }
 
+        // Ramp length contribution from 100 objects to its cap at 2,000 objects.
         let length = ((self.object_count as f64 - 100.0) / 1900.0).clamp(0.0, 1.0);
         let complexity_ratio = (self.pattern_complexity / (self.object_count.saturating_sub(1) as f64)).clamp(0.0, 1.0);
 
-        // Dynamic Hidden Multiplier based on combo and complexity
+        // Hidden adds a moderate visibility burden, increasing with map length and complexity.
         let hidden_multiplier = if self.hidden {
             let base_hidden = 1.2;
             let combo_scaling = ((self.object_count as f64) / 1500.0).clamp(0.0, 1.0);
@@ -99,12 +106,14 @@ impl Memory {
             1.0
         };
 
+        // Pattern complexity adds at most 35% on top of the length and Hidden factors.
         let pattern_multiplier = 1.0 + 0.35 * complexity_ratio;
 
         length.powf(1.35) * hidden_multiplier * pattern_multiplier
     }
 
     pub fn difficulty_to_performance(difficulty: f64) -> f64 {
+        // Convert the skill rating to its base PP before score-quality adjustments.
         25.0 * difficulty.powf(2.0)
     }
 
@@ -117,6 +126,7 @@ impl Memory {
         total_hits: f64,
     ) -> f64 {
         let base = Self::difficulty_to_performance(difficulty);
+        // Accuracy, achieved combo, and misses scale the base value independently.
         let accuracy_factor = (0.4 + 0.6 * accuracy.clamp(0.0, 1.0)).powf(1.5);
         let combo_factor = (0.5 + 0.5 * (combo / max_combo.max(1.0)).clamp(0.0, 1.0)).powf(0.8);
         let miss_factor = if misses > 0.0 {

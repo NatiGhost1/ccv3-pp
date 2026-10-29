@@ -20,6 +20,7 @@ struct SpecificPlay {
     n100: Option<u32>,
     n50: Option<u32>,
     accuracy: Option<f64>,
+    ar: Option<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -37,6 +38,7 @@ impl SpecificPlay {
             && self.n100.is_none()
             && self.n50.is_none()
             && self.accuracy.is_none()
+            && self.ar.is_none()
     }
 }
 
@@ -50,6 +52,7 @@ fn print_usage(program: &str) {
     eprintln!("  --100s <count>      Specify number of 100s");
     eprintln!("  --50s <count>       Specify number of 50s");
     eprintln!("  --accuracy <acc>    Specify play accuracy in %");
+    eprintln!("  --ar <ar>           Override the beatmap AR before mod adjustments");
     eprintln!("  --plays <plays>     Number of plays to generate");
     eprintln!("  --seed <seed>       Seed for random generation of unspecified fields");
     eprintln!("  --all               Show the full diagnostic breakdown");
@@ -299,6 +302,24 @@ fn main() {
                     exit(1);
                 }));
             }
+            "--ar" => {
+                let value = iter.next().unwrap_or_else(|| {
+                    eprintln!("Missing value for --ar");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                let ar = value.parse::<f32>().unwrap_or_else(|_| {
+                    eprintln!("Invalid AR: {value}; expected a value from -20 to 20");
+                    print_usage(&args[0]);
+                    exit(1);
+                });
+                if !(-20.0..=20.0).contains(&ar) {
+                    eprintln!("Invalid AR: {value}; expected a value from -20 to 20");
+                    print_usage(&args[0]);
+                    exit(1);
+                }
+                explicit.ar = Some(ar);
+            }
             "--plays" => {
                 let value = iter.next().unwrap_or_else(|| {
                     eprintln!("Missing value for --plays");
@@ -371,9 +392,34 @@ fn main() {
         }
     };
 
+    let summary_ar = explicit.mods.as_ref().map(|(_, mods_legacy)| {
+        let handling = explicit.handling.unwrap_or(if mods_legacy.contains(GameModsLegacy::Relax) {
+            Handling::Relax
+        } else {
+            Handling::Vanilla
+        });
+        let calculation_mods_legacy = match handling {
+            Handling::Vanilla => *mods_legacy - GameModsLegacy::Relax,
+            Handling::Relax => *mods_legacy,
+        };
+
+        let difficulty = Difficulty::new().mods(GameMods::from(calculation_mods_legacy));
+        let difficulty = if let Some(ar) = explicit.ar {
+            difficulty.ar(ar, false)
+        } else {
+            difficulty
+        };
+
+        adjusted_ar(&map, &difficulty)
+    });
+
     println!("Beatmap: {}", map_path.display());
     println!("Mode: {:?}", map.mode);
-    println!("AR: {:.2}", map.ar);
+    if let Some(ar) = summary_ar {
+        println!("AR: {ar:.2}");
+    } else {
+        println!("Base AR: {:.2}", explicit.ar.unwrap_or(map.ar));
+    }
     println!("BPM: {:.2}", map.bpm());
     println!("Total hitobjects: {}", map.hit_objects.len());
     println!("Seed: {seed}");
@@ -405,9 +451,14 @@ fn main() {
         };
         let calculation_mods = GameMods::from(calculation_mods_legacy);
 
-        let diff_attrs = Difficulty::new()
-            .mods(calculation_mods.clone())
-            .calculate(&map);
+        let difficulty = Difficulty::new().mods(calculation_mods.clone());
+        let difficulty = if let Some(ar) = explicit.ar {
+            difficulty.ar(ar, false)
+        } else {
+            difficulty
+        };
+        let ar = adjusted_ar(&map, &difficulty);
+        let diff_attrs = difficulty.calculate(&map);
         let max_combo = diff_attrs.max_combo();
         let misses = explicit
             .misses
@@ -464,13 +515,13 @@ fn main() {
             .hitresult_generator::<Composable<Closest, Closest, Closest, Closest>>()
             .calculate();
 
-        let (pp_aim, pp_speed, pp_acc, pp_flashlight, reading_diff) = match &perf_attrs {
+        let (pp_aim, pp_speed, pp_acc, pp_flashlight, pp_reading) = match &perf_attrs {
             PerformanceAttributes::Osu(attrs) => (
                 attrs.pp_aim,
                 attrs.pp_speed,
                 attrs.pp_acc,
                 attrs.pp_flashlight,
-                attrs.difficulty.reading,
+                attrs.pp_reading,
             ),
             _ => (0.0, 0.0, 0.0, 0.0, 0.0),
         };
@@ -513,6 +564,7 @@ fn main() {
 
         if show_all {
             println!("#{index:02}  {mod_list}  [{handling_label}]");
+            println!("  AR: {:.2}", ar);
             println!(
                 "  Stars: {:.2}★ (weighted {:.2}★)",
                 perf_attrs.stars(),
@@ -523,7 +575,7 @@ fn main() {
             println!("  SS: {:.2} pp", ss_attrs.pp());
             println!(
                 "  Aim: {:.2}  Speed: {:.2}  Acc: {:.2}  FL: {:.2}  Read: {:.2}",
-                pp_aim, pp_speed, pp_acc, pp_flashlight, reading_diff
+                pp_aim, pp_speed, pp_acc, pp_flashlight, pp_reading
             );
             println!("  Combo: {combo}/{max_combo}");
             println!(
@@ -541,12 +593,13 @@ fn main() {
         } else {
             println!("Play #{index}");
             println!("  Mods: {mod_list} [{handling_label}]");
+            println!("  AR: {:.2}", ar);
             println!(
                 "  Stars: {:.2}★ (weighted {:.2}★)",
                 perf_attrs.stars(),
                 weighted_stars
             );
-            println!("  Reading: {:.2}", reading_diff);
+            println!("  Reading PP: {:.2}", pp_reading);
             println!("  Accuracy: {:.4}%", achieved_accuracy * 100.0);
             println!("  Combo: {combo}/{max_combo}");
             println!(
@@ -562,6 +615,14 @@ fn main() {
             );
         }
     }
+}
+
+fn adjusted_ar(map: &Beatmap, difficulty: &Difficulty) -> f64 {
+    map.attributes()
+        .difficulty(difficulty)
+        .build()
+        .apply_clock_rate()
+        .ar
 }
 
 fn vanilla_miss_exponent(

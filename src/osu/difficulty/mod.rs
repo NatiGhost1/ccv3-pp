@@ -1,7 +1,9 @@
 use std::{cmp, pin::Pin};
 
 use rosu_map::section::general::GameMode;
-use skills::{aim::Aim, flashlight::Flashlight, speed::Speed, strain::OsuStrainSkill};
+use skills::{
+    aim::Aim, flashlight::Flashlight, reading::Reading, speed::Speed, strain::OsuStrainSkill,
+};
 
 use crate::{
     Beatmap,
@@ -382,7 +384,7 @@ impl DifficultyValues {
         let reading_rating = if mods.rx() {
             0.0
         } else {
-            reading_difficulty * 0.09
+            Reading::difficulty_to_rating(reading_difficulty)
         };
 
         let base_aim_performance = Aim::difficulty_to_performance(aim_rating);
