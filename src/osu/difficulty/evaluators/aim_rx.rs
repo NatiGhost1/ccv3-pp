@@ -41,9 +41,14 @@ use crate::{
 pub struct AimRxEvaluator;
 
 // ─── Windowed statistics helpers ────────────────────────────────────
+// These helper functions analyze trailing windows of recent hit objects
+// to derive standard deviation (variance) and mean values for angles,
+// distances, velocities, and time deltas.
 
-const ANGLE_WINDOW: usize = 8;
+const ANGLE_WINDOW: usize = 8; // Evaluates a trailing window of up to 8 objects
 
+/// Computes mean angle, angle standard deviation, and note count over the lookback window.
+/// Used to detect predictable angle repetitions vs unpredictable tech angles.
 fn windowed_angle_stats<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -74,6 +79,8 @@ fn windowed_angle_stats<'a>(
     (mean, variance.sqrt(), n)
 }
 
+/// Computes mean jump distance, distance standard deviation, and note count.
+/// Helps spot uniform flow spacing vs wide jump/stream distance variations.
 fn windowed_dist_stats<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -99,6 +106,8 @@ fn windowed_dist_stats<'a>(
     (mean, var.sqrt(), n)
 }
 
+/// Computes mean cursor velocity (px/ms), velocity standard deviation, and note count.
+/// Constant velocity indicates mechanical aim slop, while variable velocity indicates tech.
 fn windowed_vel_stats<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -128,9 +137,8 @@ fn windowed_vel_stats<'a>(
     (mean, var.sqrt(), n)
 }
 
-/// Windowed stats over the gap (delta) TIMES of recent objects — used to spot
-/// a "stream signature": a consistent, fast 1/4 rhythm. Returns
-/// (mean_delta_ms, stddev_delta_ms, count).
+/// Windowed stats over time gaps (delta) of recent objects — identifies stream signatures.
+/// Fast, even 1/4 rhythms have low delta time variance regardless of physical circle spacing.
 fn windowed_delta_stats<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -160,8 +168,8 @@ fn windowed_delta_stats<'a>(
     (mean, var.sqrt(), n)
 }
 
-/// Detect N/X alternating patterns: look at consecutive angle pairs
-/// and check if they alternate between two values (±tolerance).
+/// Detects N/X alternating patterns: checks if alternating angles form two tight clusters.
+/// On Relax (RX), alternating back-and-forth movement is trivial to hit.
 fn detect_nx_pattern<'a>(
     curr: &'a OsuDifficultyObject<'a>,
     diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -185,6 +193,7 @@ fn detect_nx_pattern<'a>(
         return 0.0;
     }
 
+    // Split angles into even and odd positions
     let evens: Vec<f64> = angles.iter().step_by(2).copied().collect();
     let odds: Vec<f64> = angles.iter().skip(1).step_by(2).copied().collect();
 
@@ -201,6 +210,7 @@ fn detect_nx_pattern<'a>(
     let even_stddev = even_var.sqrt();
     let odd_stddev = odd_var.sqrt();
 
+    // High pattern strength occurs if evens and odds each group tightly, but differ from each other
     let cluster_tight = even_stddev < 0.25 && odd_stddev < 0.25;
     let clusters_differ = (even_mean - odd_mean).abs() > 0.3;
 
@@ -214,7 +224,7 @@ fn detect_nx_pattern<'a>(
 }
 
 impl AimRxEvaluator {
-    // Recalibrated constants to produce akat-equivalent pp output.
+    // Recalibrated constants to produce skill-equivalent pp output.
     const WIDE_ANGLE_MULTIPLIER: f64 = 1.56;
     const ACUTE_ANGLE_MULTIPLIER: f64 = 2.66;
     const SLIDER_MULTIPLIER: f64 = 1.03;
@@ -222,36 +232,20 @@ impl AimRxEvaluator {
     const WIGGLE_MULTIPLIER: f64 = 1.02;
     const AIM_CALIBRATION: f64 = 0.92;
 
-    // New Thresholds for Stacks/Dense
-    const PSEUDO_STACK_THRESHOLD: f64 = 10.0;
-    const DENSE_SPACING_THRESHOLD: f64 = 45.0;
-
-    // ── Stream-density nerf (CC V3) ─────────────────────────────────
-    // Heavily nerfs fast, tightly-spaced 1/4 stream aim under Relax. These
-    // maps (high-BPM symphonic/speedcore streams) are pure tapping in vanilla
-    // but become huge "aim" pp under RX where the tapping is free. The nerf
-    // keys off effective stream BPM (from adjusted_delta_time) and spacing
-    // (lazy_jump_dist): a note only counts as farm-stream when it is BOTH fast
-    // AND tightly spaced, so genuine jump/flow aim (large spacing) is untouched.
-    //
-    // ramp from no nerf at STREAM_BPM_MIN up to full at STREAM_BPM_MAX, gated
-    // by a spacing window that fades the nerf out once notes are jump-spaced.
-    const STREAM_BPM_MIN: f64 = 200.0; // below this eff-BPM: no stream nerf
-    const STREAM_BPM_MAX: f64 = 280.0; // at/above this: full BPM weight
-    const STREAM_DIST_FULL: f64 = 80.0; // <= this spacing (px): full nerf weight
-    const STREAM_DIST_EXEMPT: f64 = 170.0; // >= this spacing: exempt (real jumps)
-    const STREAM_MAX_NERF: f64 = 0.55; // up to 55% strain removed on the worst streams
+    // Stack and flow spacing thresholds.
+    const PSEUDO_STACK_THRESHOLD: f64 = 10.0;   // Under 10px = pseudo-stack (0 pp awarded)
+    const DENSE_SPACING_THRESHOLD: f64 = 55.0;  // Spacing window for dense stream/flow aim
 
     // ── Stream-signature tech-buff gate (CC V3) ─────────────────────
     // A "stream signature" is a consistent, fast 1/4 RHYTHM — regardless of
-    // spatial spacing. Spaced streams (similar patterns but spaced) have the
-    // same even rhythm as a normal stream but larger jumps, which creates
-    // velocity variety and can otherwise trip the tech buff. Under Relax that's
-    // still just a stream, so the tech buff must NOT apply. Detection is purely
-    // rhythmic: short mean gap (fast) + low gap-time variance (even rhythm).
-    const STREAM_SIG_BPM_MIN: f64 = 180.0; // mean 1/4 BPM at/above which it's "fast"
-    const STREAM_SIG_CV_MAX: f64 = 0.18; // gap-time coeff. of variation below which it's "even"
-    const STREAM_SIG_MIN_NOTES: usize = 5; // need a real run, not 2-3 notes
+    // spatial spacing. Spaced streams have the same even rhythm as normal streams
+    // but larger jumps, which creates velocity variety and could otherwise trip
+    // the tech buff. Under Relax that's still just a stream, so the tech buff
+    // must NOT apply. Detection is purely rhythmic: short mean gap (fast) + low
+    // gap-time variance (even rhythm).
+    const STREAM_SIG_BPM_MIN: f64 = 180.0; // Mean 1/4 BPM threshold (>= 180 BPM)
+    const STREAM_SIG_CV_MAX: f64 = 0.18;   // Gap-time coefficient of variation ceiling (<= 18% variance)
+    const STREAM_SIG_MIN_NOTES: usize = 5; // Must be at least 5 consecutive notes
 
     const SLOW_SLIDER_VEL_FLOOR: f64 = 0.55;
 
@@ -267,9 +261,10 @@ impl AimRxEvaluator {
     const FLOW_MIN_EFF_BPM: f64 = 210.25;
     const FLOW_MEAN_ANGLE_THRESHOLD: f64 = 2.0;
     const FLOW_STDDEV_THRESHOLD: f64 = 0.3;
-    const FLOW_MAX_NERF: f64 = 0.50;
-    const FLOW_DIST_FULL_NERF: f64 = 50.0;
-    const FLOW_DIST_EXEMPT: f64 = 97.0;
+    const FLOW_MAX_NERF: f64 = 0.70;
+    const FLOW_DIST_MIN: f64 = 55.0;
+    const FLOW_DIST_FULL: f64 = 90.0;
+    const FLOW_DIST_EXEMPT: f64 = 150.0;
 
     #[warn(dead_code)]
     const NX_MAX_NERF: f64 = 0.30;
@@ -280,8 +275,10 @@ impl AimRxEvaluator {
     const HYBRID_MAX_BOOST: f64 = 0.12;
     
     // Additional tuning constants
-    const TECH_OVERALL_CAP: f64 = 1.08;
+    const TECH_OVERALL_CAP: f64 = 1.08; // Maximum 8% overall tech boost cap
 
+    // Neutral flow distance bands: standard jump/flow patterns staying within
+    // these typical distance steps are explicitly barred from receiving tech boosts.
     const NEUTRAL_FLOW_DIST_RANGES: [(f64, f64); 5] = [
         (90.0, 112.0),
         (70.0, 90.0),
@@ -292,6 +289,7 @@ impl AimRxEvaluator {
 
     /// True when recent objects form a stream signature: a consistent, fast
     /// 1/4 rhythm. Spacing is intentionally ignored, so spaced streams count.
+    /// This prevents high-velocity spaced streams from triggering a fake "tech buff".
     fn is_stream_pattern<'a>(
         curr: &'a OsuDifficultyObject<'a>,
         diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -302,10 +300,12 @@ impl AimRxEvaluator {
             return false;
         }
         let eff_bpm = milliseconds_to_bpm(delta_mean, None);
-        let cv = delta_stddev / delta_mean;
+        let cv = delta_stddev / delta_mean; // Coefficient of variation in timing
         eff_bpm >= Self::STREAM_SIG_BPM_MIN && cv <= Self::STREAM_SIG_CV_MAX
     }
 
+    /// Calculates a scaling factor to nerf high repetition on large circle sizes (low CS),
+    /// while giving precision forgiveness to smaller circle sizes (high CS).
     fn relax_repeat_nerf_radius_factor(circle_radius: f64) -> f64 {
         if circle_radius >= Self::RELAX_REPEAT_NERF_RADIUS_START {
             return 1.0;
@@ -318,6 +318,8 @@ impl AimRxEvaluator {
         f64::exp(-Self::RELAX_REPEAT_NERF_EXPONENT * ratio)
     }
 
+    /// Checks if object spacing consistently sits in standard neutral flow bands.
+    /// Neutral flow patterns are protected against false tech buffs.
     fn is_neutral_flow_pattern<'a>(
         curr: &'a OsuDifficultyObject<'a>,
         diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -329,7 +331,7 @@ impl AimRxEvaluator {
 
         let cv = dist_stddev / dist_mean;
         if cv > 0.25 {
-            return false;
+            return false; // High distance variance -> not standard neutral flow
         }
 
         Self::NEUTRAL_FLOW_DIST_RANGES.iter().any(|&(low, high)| {
@@ -337,8 +339,68 @@ impl AimRxEvaluator {
         })
     }
 
-    // Farm streak considers all farm-related nerfs (N/X, slop, cross-screen).
-    // Flow aim is excluded.
+    /// Evaluates overall flow aim nerf. Lowers strain on smooth, repetitive circular/linear streams
+    /// where Relax removes the timing difficulty.
+    fn combined_flow_nerf<'a>(
+        curr: &'a OsuDifficultyObject<'a>,
+        diff_objects: &'a [OsuDifficultyObject<'a>],
+    ) -> f64 {
+        // Penalty for moving abruptly from a pseudo-stack (under 10px) to dense spacing (under 55px)
+        let transition = if curr.lazy_jump_dist > Self::PSEUDO_STACK_THRESHOLD
+            && curr.lazy_jump_dist <= Self::DENSE_SPACING_THRESHOLD
+            && curr
+                .previous(0, diff_objects)
+                .is_some_and(|prev| prev.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD)
+        {
+            0.35 * (curr.circle_radius / 36.0).clamp(0.2, 1.0)
+        } else {
+            0.0
+        };
+
+        let (angle_mean, angle_stddev, angle_n) =
+            windowed_angle_stats(curr, diff_objects, ANGLE_WINDOW);
+        let (dist_mean, dist_stddev, dist_n) =
+            windowed_dist_stats(curr, diff_objects, ANGLE_WINDOW);
+
+        if angle_n < 4 || dist_n < 4 || dist_mean < Self::FLOW_DIST_MIN {
+            return Self::FLOW_MAX_NERF * transition;
+        }
+
+        // Circular/smooth flow shape evaluation
+        let shape = ((angle_mean - Self::FLOW_MEAN_ANGLE_THRESHOLD)
+            / (PI - Self::FLOW_MEAN_ANGLE_THRESHOLD))
+            .clamp(0.0, 1.0)
+            * (1.0 - (angle_stddev / Self::FLOW_STDDEV_THRESHOLD).clamp(0.0, 1.0)).powi(2);
+
+        let distance_gate = smoothstep(dist_mean, Self::FLOW_DIST_MIN, Self::FLOW_DIST_FULL);
+        let distance_consistency =
+            (1.0 - (dist_stddev / dist_mean / 0.25).clamp(0.0, 1.0)).max(0.0);
+        let flow_shape = shape * distance_gate * distance_consistency;
+
+        let bpm = milliseconds_to_bpm(curr.adjusted_delta_time, None);
+        let dense_rhythm = reverse_lerp(bpm, Self::FLOW_MIN_EFF_BPM, 360.0)
+            * reverse_lerp(dist_mean, Self::FLOW_DIST_MIN, Self::FLOW_DIST_EXEMPT);
+
+        // Highly predictable circular movement ("washing machine" stream)
+        let washing_machine = flow_shape
+            * (1.0 - (angle_stddev / 0.12).clamp(0.0, 1.0))
+            * (1.0 - (dist_stddev / dist_mean / 0.08).clamp(0.0, 1.0));
+
+        // Fast, evenly spaced flow is less aim-demanding on RX.
+        let fast_regular_flow = reverse_lerp(bpm, 280.0, 400.0)
+            * distance_consistency
+            * (1.0 - washing_machine);
+        let speed_adjustment = (1.0 - 0.75 * fast_regular_flow).clamp(0.25, 1.0);
+
+        let severity = (flow_shape.max(dense_rhythm * flow_shape) * speed_adjustment)
+            .max(transition)
+            .clamp(0.0, 1.0);
+
+        Self::FLOW_MAX_NERF * severity
+    }
+
+    /// Counts consecutive farm objects (N/X, aim slop, cross-screen) trailing behind the current note.
+    /// Used to delay tech boosts immediately after farm sections.
     fn recent_farm_streak<'a>(
         curr: &'a OsuDifficultyObject<'a>,
         diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -351,20 +413,14 @@ impl AimRxEvaluator {
             if let Some(obj) = current {
                 let nx_strength = detect_nx_pattern(obj, diff_objects, 4);
 
-                // Angle consistency
                 let (_, angle_stddev, angle_n) = windowed_angle_stats(obj, diff_objects, 4);
-
-                // Distance consistency
                 let (dist_mean, dist_stddev, dist_n) = windowed_dist_stats(obj, diff_objects, 4);
-
-                // Velocity consistency
                 let (vel_mean, vel_stddev, vel_n) = windowed_vel_stats(obj, diff_objects, 4);
 
                 let slop_like = (angle_n >= 3 && angle_stddev < 0.30)
                     || (dist_n >= 3 && dist_mean > 0.0 && dist_stddev / dist_mean < 0.16)
                     || (vel_n >= 3 && vel_mean > 0.0 && vel_stddev / vel_mean < 0.16);
 
-                // Cross-screen constant distance
                 let cross_like = {
                     let curr_d = obj.lazy_jump_dist;
                     if let Some(prev) = obj.previous(0, diff_objects) {
@@ -396,6 +452,7 @@ impl AimRxEvaluator {
         streak
     }
 
+    /// Tracks how many recent objects had no followpoints (very close jump spacing <= 112px).
     fn recent_no_followpoint_streak<'a>(
         curr: &'a OsuDifficultyObject<'a>,
         diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -420,10 +477,12 @@ impl AimRxEvaluator {
         streak
     }
 
+    /// Combines multiple farm severity metrics into a single unified farm reduction factor.
     fn combine_farm_severity(nx_strength: f64, slop_severity: f64, cross_severity: f64) -> f64 {
         1.0 - (1.0 - nx_strength) * (1.0 - slop_severity) * (1.0 - cross_severity)
     }
 
+    /// Main entry point: calculates the complete Relax aim strain value for a given hit object.
     pub fn evaluate_diff_of<'a>(
         curr: &'a OsuDifficultyObject<'a>,
         diff_objects: &'a [OsuDifficultyObject<'a>],
@@ -442,7 +501,7 @@ impl AimRxEvaluator {
         const RADIUS: i32 = OsuDifficultyObject::NORMALIZED_RADIUS;
         const DIAMETER: i32 = OsuDifficultyObject::NORMALIZED_DIAMETER;
 
-        // ── Velocities ──────────────────────────────────────────────
+        // ── 1. Calculate Cursor Velocities ──────────────────────────────
         let mut curr_vel = osu_curr_obj.lazy_jump_dist / osu_curr_obj.adjusted_delta_time;
 
         if osu_last_obj.base.is_slider() && with_slider_travel_dist {
@@ -467,10 +526,11 @@ impl AimRxEvaluator {
 
         let mut aim_strain = curr_vel;
 
-        // ── Angle bonuses ───────────────────────────────────────────
+        // ── 2. Calculate Angle & Movement Bonuses ────────────────────────
         if let Some((curr_angle, last_angle)) = osu_curr_obj.angle.zip(osu_last_obj.angle) {
             let angle_bonus = curr_vel.min(prev_vel);
 
+            // Acute angle bonus (sharp back-and-forth direction changes)
             if osu_curr_obj
                 .adjusted_delta_time
                 .max(osu_last_obj.adjusted_delta_time)
@@ -502,6 +562,7 @@ impl AimRxEvaluator {
                     );
             }
 
+            // Wide angle bonus (triangles, polygons, wide jump angles)
             wide_angle_bonus = Self::calc_wide_angle_bonus(curr_angle);
 
             let (_win_mean, win_stddev, win_n) =
@@ -521,6 +582,7 @@ impl AimRxEvaluator {
                 * smootherstep(osu_curr_obj.lazy_jump_dist, 0.0, f64::from(DIAMETER))
                 * (1.0 - wide_rep_nerf).max(0.0);
             
+            // Wiggle bonus (fast slight adjustments on small jumps)
             wiggle_bonus = angle_bonus
                 * smootherstep(
                     osu_curr_obj.lazy_jump_dist,
@@ -560,7 +622,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Velocity change bonus ───────────────────────────────────
+        // ── 3. Velocity Change Bonus ─────────────────────────────────────
         if prev_vel.max(curr_vel).not_eq(0.0) {
             prev_vel = (osu_last_obj.lazy_jump_dist + osu_last_last_obj.travel_dist)
                 / osu_last_obj.adjusted_delta_time;
@@ -590,8 +652,7 @@ impl AimRxEvaluator {
             vel_change_bonus *= bonus_base.powf(2.0);
         }
 
-        // ── Slider bonus with slow-slider taper ─────────────────────
-        // Slider breakability check
+        // ── 4. Slider Bonus with Slow-Slider Taper ───────────────────────
         if osu_last_obj.base.is_slider() {
             if osu_last_obj.travel_dist > osu_curr_obj.circle_radius * 1.2 {
                 let travel_vel = osu_last_obj.travel_dist / osu_last_obj.travel_time;
@@ -604,7 +665,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Combine ─────────────────────────────────────────────────
+        // ── 5. Combine Base Strain Factors ──────────────────────────────
         aim_strain += wiggle_bonus * Self::WIGGLE_MULTIPLIER;
         aim_strain += vel_change_bonus * Self::VELOCITY_CHANGE_MULTIPLIER;
 
@@ -617,35 +678,27 @@ impl AimRxEvaluator {
             aim_strain += slider_bonus * Self::SLIDER_MULTIPLIER;
         }
 
-        // ═════════════════════════════════════════════════════════════
-        // CC V3 RX-specific nerfs and boosts (post-combine)
-        // ═════════════════════════════════════════════════════════════
+        // ═════════════════════════════════════════════════════════════════
+        // CC V3 RX-Specific Adjustments (Nerfs, Buffs, and Tech Checks)
+        // ═════════════════════════════════════════════════════════════════
 
-        // No pp for pseudo-stacks
+        // Pseudo-stack check: notes closer than 10px receive zero pp on RX.
         if osu_curr_obj.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD {
             return 0.0;
         }
 
-        // Stack to dense transitions and precision scaling
-        // Note: Precision scaling probably needs changed to correctly work
         let precision_scaler = (osu_curr_obj.circle_radius / 36.0).clamp(0.2, 1.0);
-        if osu_last_obj.lazy_jump_dist <= Self::PSEUDO_STACK_THRESHOLD 
-            && osu_curr_obj.lazy_jump_dist <= Self::DENSE_SPACING_THRESHOLD 
-        {
-            aim_strain *= 1.0 - (0.4 * precision_scaler);
-        }
 
         let eff_bpm = 30_000.0 / osu_curr_obj.adjusted_delta_time;
         let no_followpoint_streak =
             Self::recent_no_followpoint_streak(osu_curr_obj, diff_objects, 6);
-        let is_flow_candidate = eff_bpm > Self::FLOW_MIN_EFF_BPM && no_followpoint_streak >= 6;
         let skip_farm_detection = no_followpoint_streak < 6;
 
         let mut cross_screen_nerf = 0.0;
-        let mut flow_nerf = 0.0;
-        let mut flow_active = false;
+        let flow_nerf = Self::combined_flow_nerf(osu_curr_obj, diff_objects);
+        let flow_active = flow_nerf > 0.0;
 
-        // ── N/X alternating pattern severity ─────────────────────────────
+        // ── N/X Pattern Severity ─────────────────────────────────────────
         let nx_severity = if !skip_farm_detection {
             let nx_strength = detect_nx_pattern(osu_curr_obj, diff_objects, ANGLE_WINDOW);
             if nx_strength > 0.05 {
@@ -669,7 +722,8 @@ impl AimRxEvaluator {
             0.0
         };
 
-        // ── Aim slop detection ──────────────────────────────────────
+        // ── Aim Slop Detection ───────────────────────────────────────────
+        // Identifies mechanical, repetitive jumps (constant angle + constant distance + constant speed).
         let slop_severity = if !skip_farm_detection {
             let (_, angle_stddev, angle_n) =
                 windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
@@ -696,8 +750,8 @@ impl AimRxEvaluator {
             0.0
         };
 
-        // ── Cross-screen constant-distance nerf ─────────────────────
-        // Cross-screen strictly relies on N/X or Slop
+        // ── Cross-Screen Constant Distance Nerf ──────────────────────────
+        // Only triggers if accompanied by N/X or Slop patterns.
         if !flow_active && !skip_farm_detection && osu_curr_obj.adjusted_delta_time >= Self::CONSTANT_DIST_BPM_STRAIN_TIME {
             let curr_d = osu_curr_obj.lazy_jump_dist;
             let prev_d = osu_last_obj.lazy_jump_dist;
@@ -725,47 +779,7 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Extreme flow aim nerf (distance-gated) ──────────────────
-        if is_flow_candidate {
-            let (flow_mean, flow_stddev, flow_n) =
-                windowed_angle_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-            if flow_n >= 4 {
-                let mean_ok = flow_mean >= Self::FLOW_MEAN_ANGLE_THRESHOLD;
-                let stddev_ok = flow_stddev <= Self::FLOW_STDDEV_THRESHOLD;
-
-                if mean_ok && stddev_ok {
-                    let stddev_severity =
-                        (1.0 - (flow_stddev / Self::FLOW_STDDEV_THRESHOLD)).powi(2);
-                    let mean_range = PI - Self::FLOW_MEAN_ANGLE_THRESHOLD;
-                    let mean_severity = ((flow_mean - Self::FLOW_MEAN_ANGLE_THRESHOLD)
-                        / mean_range)
-                        .clamp(0.0, 1.0);
-                    let angle_severity = stddev_severity * mean_severity;
-
-                    let (avg_dist, _, dist_n) =
-                        windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
-
-                    let dist_factor = if dist_n < 3 {
-                        0.5
-                    } else if avg_dist <= Self::FLOW_DIST_FULL_NERF {
-                        1.0
-                    } else if avg_dist >= Self::FLOW_DIST_EXEMPT {
-                        0.0
-                    } else {
-                        1.0 - ((avg_dist - Self::FLOW_DIST_FULL_NERF)
-                            / (Self::FLOW_DIST_EXEMPT - Self::FLOW_DIST_FULL_NERF))
-                    };
-
-                    let combined = angle_severity * dist_factor;
-                    flow_nerf = Self::FLOW_MAX_NERF * combined;
-                    if flow_nerf > 0.0 {
-                        flow_active = true;
-                    }
-                }
-            }
-        }
-
+        // ── Tech & Hybrid Boost Calculation ──────────────────────────────
         let mut tech_boost = 0.0;
         let mut hybrid_boost = 0.0;
 
@@ -777,40 +791,45 @@ impl AimRxEvaluator {
             let (dist_mean, dist_stddev, dist_n) = 
                 windowed_dist_stats(osu_curr_obj, diff_objects, ANGLE_WINDOW);
 
+            // Technical aim boost: requires high angle variance AND high velocity variance
             if angle_n >= 4 && vel_n >= 4 {
-                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0);
+                let angle_variety = ((angle_stddev - 0.6) / 0.4).clamp(0.0, 1.0); // requires high angle stddev (> 0.6 rad)
                 let vel_cv = if vel_mean > 0.0 { vel_stddev / vel_mean } else { 0.0 };
-                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);
+                let vel_variety = ((vel_cv - 0.25) / 0.25).clamp(0.0, 1.0);       // requires high velocity CV (> 0.25)
                 let tech_signal = angle_variety * vel_variety;
                 tech_boost = Self::TECH_MAX_BOOST * tech_signal;
             }
 
-            // Hybrid Section Boost
+            // Hybrid section boost: rewards transitions between streams and wide jumps (high dist_cv)
             if dist_n >= 4 {
                 let dist_cv = if dist_mean > 0.0 { dist_stddev / dist_mean } else { 0.0 };
-                // High distance variance (mixed jumps/streams) and not just a single transition
+                // High distance variance (> 0.40) ensures regular flow streams CANNOT trigger hybrid boost
                 if dist_cv > 0.40 && dist_mean > 30.0 {
                     hybrid_boost = (dist_cv - 0.40).clamp(0.0, 1.0) * Self::HYBRID_MAX_BOOST;
                 }
             }
         }
 
+        // ── Apply Farm Nerfs & Tech Buff Gates ───────────────────────────
         let farm_severity = Self::combine_farm_severity(nx_severity, slop_severity, cross_screen_nerf / 0.15);
         let farm_nerf = (Self::FARM_MAX_NERF * farm_severity).clamp(0.0, Self::FARM_MAX_NERF);
         
-        // Precision scales the repeat nerf
+        // Scale farm nerf by circle precision
         let mut repeat_nerf_factor = Self::relax_repeat_nerf_radius_factor(osu_curr_obj.circle_radius);
         repeat_nerf_factor = 1.0 - ((1.0 - repeat_nerf_factor) * precision_scaler);
         let farm_nerf = farm_nerf * repeat_nerf_factor;
 
         let recent_farm = Self::recent_farm_streak(osu_curr_obj, diff_objects, 5);
 
-        if flow_active {
-            aim_strain *= 0.95 - flow_nerf;
-        } else {
-            aim_strain *= 1.15 - farm_nerf;
+        aim_strain *= 1.15 - farm_nerf;
 
-            // Delayed tech buff after farm + neutral pattern protection + overall cap
+        // ── FLOW AIM & STREAM SAFETY CHECK FOR TECH BOOST ────────────────
+        // Tech boost is strictly blocked if ANY of the following are true:
+        // 1. `flow_active` is true (flow nerf active).
+        // 2. `recent_farm >= 3 && farm_nerf > 0.12` (delayed tech buff following farm sections).
+        // 3. `is_neutral_flow_pattern` is true (pattern lies inside standard flow distance bands).
+        // 4. `is_stream_pattern` is true (rhythmic stream signature: fast 1/4 BPM with low time variance).
+        if !flow_active {
             let apply_tech = !(recent_farm >= 3 && farm_nerf > 0.12)
                 && !Self::is_neutral_flow_pattern(osu_curr_obj, diff_objects)
                 && !Self::is_stream_pattern(osu_curr_obj, diff_objects);
@@ -821,23 +840,10 @@ impl AimRxEvaluator {
             }
         }
 
-        // ── Stream-density nerf ─────────────────────────────────────
-        // Fast + tightly-spaced => farm stream under RX. Both conditions
-        // required, so jump-spaced aim at the same BPM is unaffected.
-        if osu_curr_obj.adjusted_delta_time > 0.0 {
-            let eff_bpm = milliseconds_to_bpm(osu_curr_obj.adjusted_delta_time, None);
-            let bpm_weight = reverse_lerp(eff_bpm, Self::STREAM_BPM_MIN, Self::STREAM_BPM_MAX);
-            if bpm_weight > 0.0 {
-                // 1.0 at/under STREAM_DIST_FULL, fading to 0.0 at STREAM_DIST_EXEMPT.
-                let dist = osu_curr_obj.lazy_jump_dist;
-                let dist_weight = 1.0
-                    - reverse_lerp(dist, Self::STREAM_DIST_FULL, Self::STREAM_DIST_EXEMPT);
-                let stream_severity = bpm_weight * dist_weight;
-                aim_strain *= 0.92 - Self::STREAM_MAX_NERF * stream_severity;
-            }
-        }
+        // Apply flow strain reduction
+        aim_strain *= 0.9 - flow_nerf;
 
-        // ── Akat calibration ────────────────────────────────────────
+        // Final calibration factor for RX aim strain
         aim_strain *= Self::AIM_CALIBRATION;
 
         aim_strain

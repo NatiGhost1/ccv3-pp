@@ -31,7 +31,7 @@ pub mod rx_miss;
 pub mod ap_miss;
 pub mod relax_marathon;
 pub mod marathon;
-pub mod speed_rework;
+pub mod speed_rework; // Reminder that this is not happening.
 pub mod gradual;
 pub mod auto_marathon;
 pub mod nofail;

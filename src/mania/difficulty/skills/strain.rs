@@ -13,6 +13,9 @@ define_skill! {
         individual_strains: Box<[f64]>,
         highest_individual_strain: f64 = 0.0,
         overall_strain: f64 = 1.0,
+        jack_notes: usize = 0,
+        jack_factor: f64 = 0.0,
+        total_notes: usize = 0,
     }
 
     pub fn new(total_columns: usize) -> Self {
@@ -20,6 +23,9 @@ define_skill! {
             individual_strains: vec![0.0; total_columns].into_boxed_slice(),
             highest_individual_strain: 0.0,
             overall_strain: 1.0,
+            jack_notes: 0,
+            jack_factor: 0.0,
+            total_notes: 0,
         }
     }
 }
@@ -58,6 +64,7 @@ impl Strain {
         _: &[RefCount<ManiaDifficultyObject>],
     ) -> f64 {
         let mania_curr = curr;
+        self.total_notes += 1;
 
         self.individual_strains[mania_curr.column] = apply_decay(
             self.individual_strains[mania_curr.column],
@@ -67,6 +74,11 @@ impl Strain {
 
         self.individual_strains[mania_curr.column] +=
             IndividualStrainEvaluator::evaluate_diff_of(curr);
+
+        if IndividualStrainEvaluator::is_jack(curr) {
+            self.jack_notes += 1;
+            self.jack_factor += IndividualStrainEvaluator::jack_factor(curr);
+        }
 
         // * Take the hardest individualStrain for notes that happen at the same time (in a chord).
         // * This is to ensure the order in which the notes are processed does not affect the resultant total strain.
@@ -87,6 +99,19 @@ impl Strain {
         // * By subtracting CurrentStrain, this skill effectively only considers the maximum strain of any one hitobject within each strain section.
         self.highest_individual_strain + self.overall_strain
             - self.strain_decay_skill_current_strain
+    }
+
+    pub fn jack_ratio(&self) -> f64 {
+        self.jack_notes as f64
+            / self.total_notes.max(1) as f64
+    }
+
+    pub fn jack_factor(&self) -> f64 {
+        if self.jack_notes == 0 {
+            0.0
+        } else {
+            self.jack_factor / self.jack_notes as f64
+        }
     }
 }
 

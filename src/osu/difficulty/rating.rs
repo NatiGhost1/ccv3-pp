@@ -98,7 +98,14 @@ impl OsuRatingCalculator<'_> {
         // * It is important to consider accuracy difficulty when scaling with accuracy.
         rating_multiplier *= 0.98 + self.overall_difficulty.max(0.0).powf(2.0) / 2500.0;
 
-        aim_rating * rating_multiplier.cbrt()
+        // * Probably a ai hallucination rating nerf for vanilla. 
+        let vanilla_nerf = if self.mods.rx() || self.mods.ap() {
+            1.0
+        } else {
+            0.98
+        };
+
+        aim_rating * rating_multiplier.cbrt() * vanilla_nerf
     }
 
     pub fn compute_speed_rating(&self, speed_difficulty_value: f64) -> f64 {
@@ -192,7 +199,13 @@ impl OsuRatingCalculator<'_> {
 
         rating_multiplier *= 0.95 + self.overall_difficulty.max(0.0).powf(2.0) / 750.0;
 
-        speed_rating * rating_multiplier.cbrt()
+        let vanilla_nerf = if self.mods.rx() || self.mods.ap() {
+            1.0
+        } else {
+            0.92 // 0.92 seems like a fair nerf for vanilla speed rating
+        };
+
+        speed_rating * rating_multiplier.cbrt() * vanilla_nerf
     }
 
     pub fn compute_flashlight_rating(&self, flashlight_difficulty_value: f64) -> f64 {

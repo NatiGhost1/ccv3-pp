@@ -6,6 +6,8 @@ use crate::{
     util::difficulty::{logistic, smoothstep_bell_curve},
 };
 
+use super::SpeedEvaluator;
+
 pub struct RhythmEvaluator;
 
 impl RhythmEvaluator {
@@ -13,6 +15,57 @@ impl RhythmEvaluator {
     const HISTORY_OBJECTS_MAX: usize = 32;
     const RHYTHM_OVERALL_MULTIPLIER: f64 = 1.0;
     const RHYTHM_RATIO_MULTIPLIER: f64 = 15.0;
+
+    pub fn speed_slop_multiplier(
+        curr: &OsuDifficultyObject<'_>,
+        diff_objects: &[OsuDifficultyObject<'_>],
+    ) -> f64 {
+        const HISTORY_LEN: usize = 8;
+        const MAX_RELATIVE_SPREAD: f64 = 0.12;
+        const MAX_NERF: f64 = 0.08;
+
+        let history_len = curr.idx.min(HISTORY_LEN - 1);
+        let mut deltas = Vec::with_capacity(history_len + 1);
+        deltas.push(curr.adjusted_delta_time);
+
+        for i in 0..history_len {
+            let Some(object) = curr.previous(i, diff_objects) else {
+                break;
+            };
+
+            deltas.push(object.adjusted_delta_time);
+        }
+
+        if deltas.is_empty() {
+            return 1.0;
+        }
+
+        let in_band = deltas
+            .iter()
+            .map(|&delta| SpeedEvaluator::speed_slop_strength(delta))
+            .sum::<f64>()
+            / deltas.len() as f64;
+
+        if in_band <= 0.0 {
+            return 1.0;
+        }
+
+        let mean = deltas.iter().sum::<f64>() / deltas.len() as f64;
+        let spread = (deltas.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            - deltas.iter().copied().fold(f64::INFINITY, f64::min))
+            / mean.max(1.0);
+        let consistency = ((MAX_RELATIVE_SPREAD - spread) / MAX_RELATIVE_SPREAD).clamp(0.0, 1.0);
+        let zone_coverage = in_band * in_band;
+
+        // Keep a small part of the nerf for spaced patterns, while dense patterns
+        // with changing rhythm are filtered by consistency and zone coverage.
+        let spacing = (curr.min_jump_dist + curr.travel_dist)
+            / (OsuDifficultyObject::NORMALIZED_DIAMETER as f64 * 1.25);
+        let spacing_factor = 1.0 - 0.65 * spacing.clamp(0.0, 1.0);
+        let nerf = MAX_NERF * consistency * zone_coverage * spacing_factor;
+
+        1.0 - nerf
+    }
 
     #[expect(clippy::too_many_lines, reason = "staying in-sync with lazer")]
     pub fn evaluate_diff_of<'a>(

@@ -1,7 +1,7 @@
 use crate::{
     any::difficulty::object::IDifficultyObject,
     osu::difficulty::object::OsuDifficultyObject,
-    util::difficulty::{bpm_to_milliseconds, milliseconds_to_bpm},
+    util::difficulty::{bpm_to_milliseconds, milliseconds_to_bpm, smoothstep_bell_curve},
 };
 
 pub struct SpeedEvaluator;
@@ -11,6 +11,19 @@ impl SpeedEvaluator {
     const MIN_SPEED_BONUS: f64 = 200.0; // 200 BPM 1/4th
     const SPEED_BALANCING_FACTOR: f64 = 40.0;
     const DIST_MULTIPLIER: f64 = 0.8;
+
+    pub const SPEED_SLOP_MIN_BPM: f64 = 260.0;
+    pub const SPEED_SLOP_MAX_BPM: f64 = 315.0;
+
+    pub fn speed_slop_strength(delta_time: f64) -> f64 {
+        let bpm = 60_000.0 / delta_time.max(1.0);
+
+        smoothstep_bell_curve(
+            bpm,
+            (Self::SPEED_SLOP_MIN_BPM + Self::SPEED_SLOP_MAX_BPM) / 2.0,
+            (Self::SPEED_SLOP_MAX_BPM - Self::SPEED_SLOP_MIN_BPM) / 2.0,
+        )
+    }
 
     pub fn evaluate_diff_of<'a>(
         curr: &'a OsuDifficultyObject<'a>,

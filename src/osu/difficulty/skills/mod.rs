@@ -46,8 +46,12 @@ impl OsuSkills {
         let aim_no_sliders = Aim::new(false, has_relax);
         let speed = Speed::new(hit_window, mods.ap());
         let flashlight = Flashlight::new(mods, scaling_factor.radius, time_preempt, time_fade_in);
-        let memory = Memory::new(mods.hd());
-        let reading = Reading::new(!mods.rx(), mods.ez(), approach_rate, mods.hd());
+        let memory = if mods.ap() {
+            Memory::disabled()
+        } else {
+            Memory::new(mods.hd())
+        };
+        let reading = Reading::with_settings(!mods.rx(), mods.ez(), approach_rate, mods.hd());
 
         Self {
             aim,
@@ -75,7 +79,7 @@ mod tests {
 
     #[test]
     fn reading_skill_stays_off_for_relax() {
-        let reading = Reading::new(false, false, 0.0, false);
+        let reading = Reading::with_settings(false, false, 0.0, false);
         assert_eq!(reading.difficulty(), 0.0);
     }
 }

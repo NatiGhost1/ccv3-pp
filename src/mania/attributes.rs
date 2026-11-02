@@ -9,6 +9,10 @@ pub struct ManiaDifficultyAttributes {
     pub n_objects: u32,
     /// The amount of hold notes in the map.
     pub n_hold_notes: u32,
+    /// The fraction of notes that continue a jack in the same column.
+    pub jack_ratio: f64,
+    /// The average difficulty of jack notes, normalized to `0.0..=1.0`.
+    pub jack_factor: f64,
     /// The maximum achievable combo.
     pub max_combo: u32,
     /// Whether the [`Beatmap`] was a convert i.e. an osu!standard map.

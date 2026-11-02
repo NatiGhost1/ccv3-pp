@@ -29,6 +29,8 @@ mod tests {
             stars: 7.5,
             n_objects: 300,
             n_hold_notes: 60,
+            jack_ratio: 0.5,
+            jack_factor: 0.5,
             max_combo: 420,
             is_convert: false,
         };
@@ -45,14 +47,15 @@ impl ManiaPerformanceCalculator<'_> {
         let hold_ratio = self.attrs.n_hold_notes as f64 / total_notes as f64;
         let star_pressure = (self.attrs.stars - 5.0).clamp(0.0, 6.0) / 6.0;
         let low_hold_pressure = (0.30 - hold_ratio).clamp(0.0, 0.30) / 0.30;
+        let easy_jack_pressure = self.attrs.jack_ratio * (1.0 - self.attrs.jack_factor);
 
         // Chordjacks are usually dense, note-heavy patterns with unusually few
         // hold notes. They score high star values but are less representative of
         // true technical lock consistency than similar star maps with more
         // natural spacing.
-        let intensity = (star_pressure * low_hold_pressure).clamp(0.0, 1.0);
+        let intensity = (star_pressure * low_hold_pressure * easy_jack_pressure).clamp(0.0, 1.0);
 
-        1.0 - (intensity * 0.35).clamp(0.0, 0.35)
+        1.0 - (intensity * 0.30).clamp(0.0, 0.30)
     }
 
     pub fn calculate(self) -> ManiaPerformanceAttributes {
@@ -82,7 +85,7 @@ impl ManiaPerformanceCalculator<'_> {
         // * Star rating to pp curve
         8.0 * f64::powf(f64::max(self.attrs.stars - 0.15, 0.05), 2.2)
              // * From 80% accuracy, 1/20th of total pp is awarded per additional 1% accuracy
-             * f64::max(0.0, 5.0 * self.calculate_custom_accuracy() - 4.0)
+             * self.calculate_custom_accuracy_multiplier()
              // * Length bonus, capped at 1500 notes
              * (1.0 + 0.1 * f64::min(1.0, self.total_hits() / 1500.0))
     }
@@ -108,6 +111,17 @@ impl ManiaPerformanceCalculator<'_> {
         }
 
         custom_accuracy(*n320, *n300, *n200, *n100, *n50, total_hits)
+    }
+
+    fn calculate_custom_accuracy_multiplier(&self) -> f64 {
+        let accuracy = self.calculate_custom_accuracy();
+        let accuracy = ((accuracy - 0.8) / 0.2).max(0.0);
+
+        if accuracy >= 1.0 {
+            1.0
+        } else {
+            accuracy.powf(1.25)
+        }
     }
 }
 

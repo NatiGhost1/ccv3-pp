@@ -18,6 +18,11 @@ pub struct TaikoDifficultyAttributes {
     /// The ratio of stamina difficulty from mono-color (single color) streams to total
     /// stamina difficulty.
     pub mono_stamina_factor: f64,
+    /// The proportion of very high-BPM same-color tapping characteristic of rakes.
+    ///
+    /// This is a map signal only; performance uses the score to estimate whether
+    /// the player actually benefited from rake tapping.
+    pub rake_factor: f64,
     /// The difficulty corresponding to the mechanical skills.
     ///
     /// This includes colour and stamina combined.
@@ -120,6 +125,7 @@ pub(super) mod tests {
             great_hit_window,
             ok_hit_window,
             mono_stamina_factor,
+            rake_factor,
             mechanical_difficulty,
             consistency_factor,
             stars,
@@ -144,6 +150,7 @@ pub(super) mod tests {
         assert_eq_nan!(great_hit_window);
         assert_eq_nan!(ok_hit_window);
         assert_eq_nan!(mono_stamina_factor);
+        assert_eq_nan!(rake_factor);
         assert_eq_nan!(mechanical_difficulty);
         assert_eq_nan!(consistency_factor);
         assert_eq_nan!(stars);
